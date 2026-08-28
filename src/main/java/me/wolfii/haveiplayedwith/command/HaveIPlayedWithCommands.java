@@ -40,7 +40,7 @@ public final class HaveIPlayedWithCommands {
                     return 1;
                 })));
         dispatcher.register(ClientCommands.literal("playernote")
-            .then(ClientCommands.literal("confirm")
+            .then(UnsuggestedLiteral.of("confirm")
                 .executes(context -> {
                     notes.confirmPending(context.getSource());
                     return 1;
