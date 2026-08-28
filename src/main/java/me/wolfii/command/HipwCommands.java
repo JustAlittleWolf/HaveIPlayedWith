@@ -54,19 +54,17 @@ public final class HipwCommands {
 					return 1;
 				})));
 		dispatcher.register(ClientCommands.literal("playernote")
+			.then(ClientCommands.literal("confirm")
+				.then(ClientCommands.argument("rest", StringArgumentType.greedyString())
+					.executes(context -> {
+						handleConfirm(context.getSource(), StringArgumentType.getString(context, "rest"));
+						return 1;
+					})))
 			.then(ClientCommands.argument("name", StringArgumentType.word())
 				.suggests(TAB_PLAYERS)
 				.then(ClientCommands.argument("note", StringArgumentType.greedyString())
 					.executes(context -> {
 						setNote(context.getSource(), StringArgumentType.getString(context, "name"),
-							StringArgumentType.getString(context, "note"));
-						return 1;
-					}))));
-		dispatcher.register(ClientCommands.literal("playernoteconfirm")
-			.then(ClientCommands.argument("uuid", StringArgumentType.word())
-				.then(ClientCommands.argument("note", StringArgumentType.greedyString())
-					.executes(context -> {
-						confirmNote(context.getSource(), StringArgumentType.getString(context, "uuid"),
 							StringArgumentType.getString(context, "note"));
 						return 1;
 					}))));
@@ -80,15 +78,19 @@ public final class HipwCommands {
 				return;
 			}
 			for (PlayerSnapshot match : matches) {
-				mojang.refreshIfStale(match.uuid()).ifPresent(profile -> {
+				mojang.lookupUuid(match.uuid()).ifPresent(profile -> {
 					if (!profile.username().equals(match.currentUsername())) {
 						database.applyMojangUsername(match.uuid(), profile.username(), java.time.Instant.now());
 					}
 				});
 				PlayerSnapshot latest = database.get(match.uuid()).orElse(match);
-				tell(source, QueryMessages.playedWith(latest));
-				if (!latest.pastNames().isEmpty()) {
-					tell(source, QueryMessages.pastNames(latest));
+				if (latest.hasPlayed()) {
+					tell(source, QueryMessages.playedWith(latest));
+					if (!latest.pastNames().isEmpty()) {
+						tell(source, QueryMessages.pastNames(latest));
+					}
+				} else {
+					tell(source, QueryMessages.notPlayedWith(latest.currentUsername(), latest.uuid()));
 				}
 				latest.note().ifPresent(note -> tell(source, QueryMessages.note(note)));
 			}
@@ -119,6 +121,20 @@ public final class HipwCommands {
 		});
 	}
 
+	private void handleConfirm(FabricClientCommandSource source, String rest) {
+		String cleaned = rest.replace('\n', ' ').replace('\r', ' ').strip();
+		int space = cleaned.indexOf(' ');
+		if (space > 0) {
+			String first = cleaned.substring(0, space);
+			String remainder = cleaned.substring(space + 1).strip();
+			if (isUuid(first) && !remainder.isEmpty()) {
+				confirmNote(source, first, remainder);
+				return;
+			}
+		}
+		setNote(source, "confirm", cleaned);
+	}
+
 	private void confirmNote(FabricClientCommandSource source, String uuidText, String note) {
 		worker.execute(() -> {
 			UUID uuid;
@@ -132,7 +148,7 @@ public final class HipwCommands {
 			if (username == null) {
 				username = mojang.lookupUuid(uuid).map(MojangClient.Profile::username).orElse(uuidText);
 			}
-			database.setNote(uuid, username, note);
+			database.setNote(uuid, username, note.replace('\n', ' ').replace('\r', ' ').strip());
 			tell(source, QueryMessages.noteSaved(username));
 		});
 	}
@@ -162,6 +178,15 @@ public final class HipwCommands {
 			Thread.currentThread().interrupt();
 		}
 		return found.get();
+	}
+
+	private static boolean isUuid(String text) {
+		try {
+			UUID.fromString(text);
+			return true;
+		} catch (IllegalArgumentException e) {
+			return false;
+		}
 	}
 
 	static void tell(FabricClientCommandSource source, Component message) {

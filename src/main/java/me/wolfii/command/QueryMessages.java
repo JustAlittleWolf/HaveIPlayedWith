@@ -34,8 +34,12 @@ public final class QueryMessages {
 	}
 
 	public static Component notPlayedWith(String name) {
+		return notPlayedWith(name, null);
+	}
+
+	public static Component notPlayedWith(String name, UUID uuid) {
 		return Component.literal("You have not played with ").withStyle(ChatFormatting.GRAY)
-			.append(clickableName(name, UNKNOWN, true, null))
+			.append(clickableName(name, UNKNOWN, true, uuid))
 			.append(Component.literal(".").withStyle(ChatFormatting.GRAY));
 	}
 
@@ -95,7 +99,7 @@ public final class QueryMessages {
 	}
 
 	public static Component noteConfirm(String name, UUID uuid, String note) {
-		String command = "/playernoteconfirm " + uuid + " " + note;
+		String command = "/playernote confirm " + uuid + " " + note;
 		MutableComponent click = Component.literal("Click here").withStyle(style -> style
 			.withColor(rgb(CONFIRM))
 			.withUnderlined(true)

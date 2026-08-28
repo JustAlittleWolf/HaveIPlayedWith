@@ -36,6 +36,11 @@ public final class AllTheLogsImporter {
 		return thread;
 	});
 	private final AtomicBoolean scheduled = new AtomicBoolean(false);
+	private final AtomicBoolean stopRequested = new AtomicBoolean(false);
+	private final AtomicBoolean silenced = new AtomicBoolean(false);
+	private volatile ImportProgress latest = new ImportProgress(
+		ImportProgress.SOURCE_ALLTHELOGS, 0, -1, null, 0, ImportProgress.STATUS_STOPPED, false
+	);
 
 	public AllTheLogsImporter(PlayerDatabase database, CraftyClient crafty) {
 		this.database = database;
@@ -49,8 +54,12 @@ public final class AllTheLogsImporter {
 		worker.execute(() -> {
 			try {
 				Optional<ImportProgress> progress = database.importProgress(ImportProgress.SOURCE_ALLTHELOGS);
+				progress.ifPresent(stored -> {
+					latest = stored;
+					silenced.set(stored.silenced());
+				});
 				if (progress.isPresent() && ImportProgress.STATUS_RUNNING.equals(progress.get().status())) {
-					chat(QueryMessages.importStatus("Resuming AllTheLogs import..."));
+					progress(QueryMessages.importStatus("Resuming AllTheLogs import..."));
 					runImport(progress.get());
 				}
 			} finally {
@@ -64,12 +73,17 @@ public final class AllTheLogsImporter {
 			chat(QueryMessages.importStatus("AllTheLogs import is already running."));
 			return;
 		}
+		stopRequested.set(false);
 		worker.execute(() -> {
 			try {
 				Optional<ImportProgress> existing = database.importProgress(ImportProgress.SOURCE_ALLTHELOGS);
 				ImportProgress start = existing
 					.filter(progress -> !ImportProgress.STATUS_DONE.equals(progress.status()))
-					.orElse(new ImportProgress(ImportProgress.SOURCE_ALLTHELOGS, 0, -1, null, 0, ImportProgress.STATUS_RUNNING));
+					.orElseGet(() -> new ImportProgress(
+						ImportProgress.SOURCE_ALLTHELOGS, 0, -1, null, 0, ImportProgress.STATUS_RUNNING,
+						existing.map(ImportProgress::silenced).orElse(false)
+					));
+				start = start.withStatus(ImportProgress.STATUS_RUNNING);
 				chat(QueryMessages.importStatus("Starting AllTheLogs import in the background."));
 				runImport(start);
 			} finally {
@@ -78,15 +92,58 @@ public final class AllTheLogsImporter {
 		});
 	}
 
+	public void stopFromCommand() {
+		if (!scheduled.get()) {
+			chat(QueryMessages.importStatus("No AllTheLogs import is running."));
+			return;
+		}
+		stopRequested.set(true);
+		chat(QueryMessages.importStatus("Stopping AllTheLogs import..."));
+	}
+
+	public void toggleSilenceFromCommand() {
+		boolean next = !silenced.get();
+		silenced.set(next);
+		ImportProgress stored = scheduled.get()
+			? latest
+			: database.importProgress(ImportProgress.SOURCE_ALLTHELOGS).orElse(latest);
+		ImportProgress current = stored.withSilenced(next);
+		latest = current;
+		database.saveImportProgress(current);
+		chat(QueryMessages.importStatus(next
+			? "AllTheLogs import progress messages silenced."
+			: "AllTheLogs import progress messages enabled."));
+	}
+
+	public void notifyIfRunning() {
+		if (!scheduled.get()) {
+			return;
+		}
+		ImportProgress progress = latest;
+		if (progress.total() > 0) {
+			progress(QueryMessages.importStatus(
+				"AllTheLogs import is still running (" + progress.processed() + "/" + progress.total() + ")."
+			));
+		} else {
+			progress(QueryMessages.importStatus(
+				"AllTheLogs import is still running (" + progress.processed() + " messages)."
+			));
+		}
+	}
+
 	private void runImport(ImportProgress start) {
+		silenced.set(start.silenced());
+		latest = start;
 		try {
 			waitUntilOpen();
+			if (stopRequested.get()) {
+				saveStopped(start);
+				return;
+			}
 			LogDatabase logs = AllTheLogs.database();
 			if (!logs.isOpen()) {
-				chat(QueryMessages.importStatus("AllTheLogs is not ready yet. The import will retry next launch."));
-				database.saveImportProgress(new ImportProgress(
-					start.source(), start.processed(), start.total(), start.lastTimestamp(), start.skip(), ImportProgress.STATUS_RUNNING
-				));
+				progress(QueryMessages.importStatus("AllTheLogs is not ready yet. The import will retry next launch."));
+				save(start.withStatus(ImportProgress.STATUS_RUNNING));
 				return;
 			}
 			long total = start.total() >= 0 ? start.total() : logs.countMatches(ChatQuery.all()).join();
@@ -95,10 +152,14 @@ public final class AllTheLogsImporter {
 			long skip = start.skip();
 			long lastSave = processed;
 			long lastReportAt = System.nanoTime();
-			database.saveImportProgress(new ImportProgress(
-				ImportProgress.SOURCE_ALLTHELOGS, processed, total, lastTimestamp, skip, ImportProgress.STATUS_RUNNING
+			save(new ImportProgress(
+				ImportProgress.SOURCE_ALLTHELOGS, processed, total, lastTimestamp, skip, ImportProgress.STATUS_RUNNING, silenced.get()
 			));
 			while (true) {
+				if (stopRequested.get()) {
+					saveStopped(latest.withCursor(processed, lastTimestamp, skip));
+					return;
+				}
 				ChatQuery query = ChatQuery.all()
 					.withSort(ChatQuery.Sort.ASCENDING)
 					.withLimit(PAGE_SIZE);
@@ -110,6 +171,10 @@ public final class AllTheLogsImporter {
 					break;
 				}
 				for (ChatEntry entry : page) {
+					if (stopRequested.get()) {
+						saveStopped(latest.withCursor(processed, lastTimestamp, skip));
+						return;
+					}
 					process(entry);
 					processed++;
 					if (lastTimestamp != null && entry.timestamp().equals(lastTimestamp)) {
@@ -120,8 +185,8 @@ public final class AllTheLogsImporter {
 					}
 					if (processed - lastSave >= SAVE_EVERY) {
 						lastSave = processed;
-						database.saveImportProgress(new ImportProgress(
-							ImportProgress.SOURCE_ALLTHELOGS, processed, total, lastTimestamp, skip, ImportProgress.STATUS_RUNNING
+						save(new ImportProgress(
+							ImportProgress.SOURCE_ALLTHELOGS, processed, total, lastTimestamp, skip, ImportProgress.STATUS_RUNNING, silenced.get()
 						));
 						long now = System.nanoTime();
 						if (now - lastReportAt >= REPORT_INTERVAL_NANOS) {
@@ -131,8 +196,8 @@ public final class AllTheLogsImporter {
 					}
 				}
 			}
-			database.saveImportProgress(new ImportProgress(
-				ImportProgress.SOURCE_ALLTHELOGS, processed, total, lastTimestamp, skip, ImportProgress.STATUS_DONE
+			save(new ImportProgress(
+				ImportProgress.SOURCE_ALLTHELOGS, processed, total, lastTimestamp, skip, ImportProgress.STATUS_DONE, silenced.get()
 			));
 			chat(QueryMessages.importStatus("AllTheLogs import finished (" + processed + " messages)."));
 		} catch (Exception e) {
@@ -173,7 +238,7 @@ public final class AllTheLogsImporter {
 
 	private void waitUntilOpen() {
 		for (int i = 0; i < 90; i++) {
-			if (AllTheLogs.database().isOpen()) {
+			if (stopRequested.get() || AllTheLogs.database().isOpen()) {
 				return;
 			}
 			try {
@@ -188,9 +253,26 @@ public final class AllTheLogsImporter {
 	private void report(long processed, long total) {
 		if (total > 0) {
 			int percent = (int) Math.min(100, (processed * 100) / total);
-			chat(QueryMessages.importStatus("AllTheLogs import: " + processed + "/" + total + " (" + percent + "%)"));
+			progress(QueryMessages.importStatus("AllTheLogs import: " + processed + "/" + total + " (" + percent + "%)"));
 		} else {
-			chat(QueryMessages.importStatus("AllTheLogs import: " + processed + " messages..."));
+			progress(QueryMessages.importStatus("AllTheLogs import: " + processed + " messages..."));
+		}
+	}
+
+	private void save(ImportProgress progress) {
+		ImportProgress stored = progress.withSilenced(silenced.get());
+		latest = stored;
+		database.saveImportProgress(stored);
+	}
+
+	private void saveStopped(ImportProgress progress) {
+		save(progress.withStatus(ImportProgress.STATUS_STOPPED));
+		chat(QueryMessages.importStatus("AllTheLogs import stopped (" + progress.processed() + " messages)."));
+	}
+
+	private void progress(Component message) {
+		if (!silenced.get()) {
+			chat(message);
 		}
 	}
 

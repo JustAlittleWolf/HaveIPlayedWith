@@ -33,7 +33,7 @@ public final class MojangClient {
 	private final PlayerDatabase database;
 	private final RateLimiter limiter = new RateLimiter(25, 10, TimeUnit.SECONDS);
 	private final ConcurrentHashMap<UUID, PlayerDatabase.MojangCache> uuidMemory = new ConcurrentHashMap<>();
-	private final ConcurrentHashMap<String, Optional<Profile>> nameMemory = new ConcurrentHashMap<>();
+	private final ConcurrentHashMap<String, PlayerDatabase.MojangNameCache> nameMemory = new ConcurrentHashMap<>();
 
 	public MojangClient(PlayerDatabase database) {
 		this.database = database;
@@ -79,26 +79,26 @@ public final class MojangClient {
 		return fetchUuid(uuid);
 	}
 
-	public Optional<Profile> refreshIfStale(UUID uuid) {
-		Optional<PlayerDatabase.MojangCache> cache = cached(uuid);
-		if (cache.isPresent() && !isStale(cache.get())) {
-			if (cache.get().username() == null) {
-				return Optional.empty();
-			}
-			return Optional.of(new Profile(uuid, cache.get().username()));
-		}
-		return fetchUuid(uuid);
-	}
-
 	public Optional<Profile> lookupName(String username) {
 		String key = username.toLowerCase(Locale.ROOT);
-		Optional<Profile> memory = nameMemory.get(key);
+		PlayerDatabase.MojangNameCache memory = nameMemory.get(key);
 		if (memory != null) {
-			return memory;
+			return profileOf(memory);
+		}
+		Optional<PlayerDatabase.MojangNameCache> stored = database.mojangNameCache(key);
+		if (stored.isPresent()) {
+			nameMemory.put(key, stored.get());
+			return profileOf(stored.get());
 		}
 		NameAnswer answer = fetchName(username);
 		if (answer.definitive()) {
-			nameMemory.put(key, answer.profile());
+			Instant now = Instant.now();
+			PlayerDatabase.MojangNameCache cache = answer.profile()
+				.map(profile -> new PlayerDatabase.MojangNameCache(profile.uuid(), profile.username(), now))
+				.orElse(new PlayerDatabase.MojangNameCache(null, null, now));
+			nameMemory.put(key, cache);
+			database.putMojangNameCache(key, cache);
+			answer.profile().ifPresent(profile -> store(profile.uuid(), profile.username()));
 		}
 		return answer.profile();
 	}
@@ -166,6 +166,13 @@ public final class MojangClient {
 		PlayerDatabase.MojangCache cache = new PlayerDatabase.MojangCache(username, Instant.now());
 		uuidMemory.put(uuid, cache);
 		database.putMojangCache(uuid, username, cache.fetchedAt());
+	}
+
+	private static Optional<Profile> profileOf(PlayerDatabase.MojangNameCache cache) {
+		if (cache.uuid() == null || cache.username() == null) {
+			return Optional.empty();
+		}
+		return Optional.of(new Profile(cache.uuid(), cache.username()));
 	}
 
 	private static String readName(String body) {
