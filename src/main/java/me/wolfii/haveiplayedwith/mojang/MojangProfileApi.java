@@ -93,16 +93,34 @@ public final class MojangProfileApi {
             return true;
         }
         String cachedName = cache.get().username();
-        if (cachedName != null && !cachedName.isBlank() && cachedName.equalsIgnoreCase(observedName)) {
+        if (resolved(cachedName) && cachedName.equalsIgnoreCase(observedName)) {
             return false;
         }
-        if (cachedName != null && !cachedName.isBlank()) {
+        if (resolved(cachedName)) {
             return true;
         }
         return isStale(cache.get());
     }
 
+    /**
+     * True when Mojang already confirmed this UUID belongs to {@code observedName}.
+     * Cached misses (empty username after 204/404) are not a match, so nearby NPCs
+     * with fake UUIDs are not credited as players.
+     */
+    public boolean matchesCachedName(UUID uuid, String observedName) {
+        Optional<MojangUuidCache> cache = cached(uuid);
+        if (cache.isEmpty()) {
+            return false;
+        }
+        String cachedName = cache.get().username();
+        return resolved(cachedName) && cachedName.equalsIgnoreCase(observedName);
+    }
+
     public Optional<MojangProfile> lookupUuid(UUID uuid) {
+        Optional<MojangUuidCache> cache = cached(uuid);
+        if (cache.isPresent() && !isStale(cache.get()) && !resolved(cache.get().username())) {
+            return Optional.empty();
+        }
         return fetchUuid(uuid);
     }
 
@@ -180,6 +198,10 @@ public final class MojangProfileApi {
             LOGGER.debug("Mojang name lookup failed for {}", username, e);
             return NameAnswer.unknown();
         }
+    }
+
+    private static boolean resolved(String username) {
+        return username != null && !username.isBlank();
     }
 
     private void storeUuid(UUID uuid, String username) {
