@@ -5,11 +5,11 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import me.wolfii.haveiplayedwith.ModLog;
-import me.wolfii.haveiplayedwith.http.JsonHttp;
+import me.wolfii.haveiplayedwith.http.JsonAnswer;
+import me.wolfii.haveiplayedwith.http.JsonApi;
 import me.wolfii.haveiplayedwith.http.RateLimiter;
 
 import java.net.URLEncoder;
-import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -28,7 +28,7 @@ import java.util.concurrent.TimeUnit;
 public final class CraftyPlayerApi {
     private static final String USERNAMES = "https://api.crafty.gg/api/v2/usernames/";
     private static final String PLAYER = "https://api.crafty.gg/api/v2/players/";
-    private final RateLimiter limiter = new RateLimiter(140, 1, TimeUnit.MINUTES);
+    private final JsonApi api = new JsonApi("Crafty", new RateLimiter(140, 1, TimeUnit.MINUTES));
     private final ConcurrentHashMap<String, List<CraftyPlayer>> owners = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<UUID, CraftyPlayer> byUuid = new ConcurrentHashMap<>();
 
@@ -127,40 +127,32 @@ public final class CraftyPlayerApi {
     }
 
     private Optional<List<CraftyPlayer>> fetchOwners(String username) {
+        String url = USERNAMES + URLEncoder.encode(username, StandardCharsets.UTF_8);
         try {
-            limiter.acquire();
-            String url = USERNAMES + URLEncoder.encode(username, StandardCharsets.UTF_8);
-            HttpResponse<String> response = JsonHttp.get(url);
-            int status = response.statusCode();
-            if (status == 404) {
-                return Optional.of(List.of());
-            }
-            if (status == 429) {
-                ModLog.LOGGER.debug("Crafty username lookup rate limited for {}", username);
-                return Optional.empty();
-            }
-            if (status / 100 != 2) {
-                ModLog.LOGGER.debug("Crafty username lookup {} returned {}", username, status);
-                return Optional.empty();
-            }
-            List<CraftyPlayer> players = new ArrayList<>();
-            for (UUID uuid : ownerUuids(response.body())) {
-                Optional<CraftyPlayer> player = player(uuid);
-                if (player.isEmpty()) {
-                    return Optional.empty();
-                }
-                if (player.get().valid()) {
-                    players.add(player.get());
-                }
-            }
-            return Optional.of(List.copyOf(players));
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            return Optional.empty();
-        } catch (Exception e) {
+            return switch (api.get(url)) {
+                case JsonAnswer.Body body -> loadAll(ownerUuids(body.json()));
+                case JsonAnswer.Missing ignored -> Optional.of(List.of());
+                case JsonAnswer.Unavailable ignored -> Optional.empty();
+            };
+        } catch (RuntimeException e) {
             ModLog.LOGGER.debug("Crafty username lookup failed for {}", username, e);
             return Optional.empty();
         }
+    }
+
+    /** Empty unless every account behind the name loaded, so a name is never cached half-resolved. */
+    private Optional<List<CraftyPlayer>> loadAll(List<UUID> uuids) {
+        List<CraftyPlayer> players = new ArrayList<>();
+        for (UUID uuid : uuids) {
+            Optional<CraftyPlayer> player = player(uuid);
+            if (player.isEmpty()) {
+                return Optional.empty();
+            }
+            if (player.get().valid()) {
+                players.add(player.get());
+            }
+        }
+        return Optional.of(List.copyOf(players));
     }
 
     private Optional<CraftyPlayer> player(UUID uuid) {
@@ -169,30 +161,18 @@ public final class CraftyPlayerApi {
             return Optional.of(remembered);
         }
         try {
-            limiter.acquire();
-            HttpResponse<String> response = JsonHttp.get(PLAYER + uuid);
-            int status = response.statusCode();
-            if (status == 404) {
-                return Optional.of(invalid());
-            }
-            if (status == 429) {
-                ModLog.LOGGER.debug("Crafty player lookup rate limited for {}", uuid);
-                return Optional.empty();
-            }
-            if (status / 100 != 2) {
-                ModLog.LOGGER.debug("Crafty player lookup {} returned {}", uuid, status);
-                return Optional.empty();
-            }
-            Optional<CraftyPlayer> parsed = parsePlayer(response.body());
-            CraftyPlayer player = parsed.filter(CraftyPlayer::valid).orElse(invalid());
-            if (player.valid()) {
-                byUuid.put(uuid, player);
-            }
-            return Optional.of(player);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            return Optional.empty();
-        } catch (Exception e) {
+            return switch (api.get(PLAYER + uuid)) {
+                case JsonAnswer.Body body -> {
+                    CraftyPlayer player = parsePlayer(body.json()).filter(CraftyPlayer::valid).orElse(invalid());
+                    if (player.valid()) {
+                        byUuid.put(uuid, player);
+                    }
+                    yield Optional.of(player);
+                }
+                case JsonAnswer.Missing ignored -> Optional.of(invalid());
+                case JsonAnswer.Unavailable ignored -> Optional.empty();
+            };
+        } catch (RuntimeException e) {
             ModLog.LOGGER.debug("Crafty player lookup failed for {}", uuid, e);
             return Optional.empty();
         }
