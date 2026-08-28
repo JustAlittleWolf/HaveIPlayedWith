@@ -29,10 +29,6 @@ public final class QueryMessages {
         return ChatStyle.wording("haveiplayedwith.query.not_played", ChatStyle.username(name, uuid, true));
     }
 
-    public static Component noMatchingPlayers() {
-        return ChatStyle.wording("haveiplayedwith.query.no_players");
-    }
-
     public static Component playedWith(PlayerSnapshot player) {
         MutableComponent duration = DurationFormat.compact(player.totalMinutes()).copy()
             .withStyle(style -> style.withHoverEvent(new HoverEvent.ShowText(DurationFormat.hover(player.totalMinutes()))));

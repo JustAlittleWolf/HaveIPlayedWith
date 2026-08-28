@@ -14,7 +14,6 @@
   "haveiplayedwith.query.seen_on": "You have seen them on %s.",
   "haveiplayedwith.query.server.entry": "%s (%s)",
   "haveiplayedwith.query.unknown_account": "Could not find a Minecraft account named %s.",
-  "haveiplayedwith.query.no_players": "No matching players.",
   "haveiplayedwith.observe.renamed": "The player you previously knew as %s is now known as %s.",
   "haveiplayedwith.note.label": "Note: %s",
   "haveiplayedwith.note.taken": "Noted %s",
