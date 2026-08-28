@@ -60,6 +60,6 @@ final class PlayerLookup {
         } else {
             CommandFeedback.tell(source, QueryMessages.notPlayedWith(latest.currentUsername(), latest.uuid()));
         }
-        latest.note().ifPresent(note -> CommandFeedback.tell(source, QueryMessages.note(note)));
+        latest.note().ifPresent(note -> CommandFeedback.tell(source, QueryMessages.note(latest)));
     }
 }

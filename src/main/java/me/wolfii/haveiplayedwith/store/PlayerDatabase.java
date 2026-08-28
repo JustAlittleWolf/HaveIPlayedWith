@@ -83,7 +83,9 @@ public final class PlayerDatabase implements AutoCloseable {
         run(() -> {
             ensurePlayerRow(uuid, username);
             StoreRows.PlayerRow row = playerRow(uuid);
-            putPlayer(uuid, new StoreRows.PlayerRow(row.currentUsername(), blankToNull(note), row.totalMinutes(), row.sessionCount()));
+            String cleaned = blankToNull(note);
+            Long takenAt = cleaned == null ? null : Instant.now().toEpochMilli();
+            putPlayer(uuid, row.withNote(cleaned, takenAt));
         });
     }
 
@@ -261,16 +263,42 @@ public final class PlayerDatabase implements AutoCloseable {
             servers.add(new ServerPlay(key.substring(prefix.length()), Long.parseLong(playServers.get(key))));
         }
         servers.sort(Comparator.comparingLong(ServerPlay::minutes).reversed().thenComparing(ServerPlay::serverId));
+        Optional<Instant> noteTakenAt = Optional.ofNullable(row.noteTakenAt()).map(Instant::ofEpochMilli);
+        Optional<String> note = Optional.ofNullable(row.note()).filter(value -> !value.isBlank());
+        if (note.isEmpty()) {
+            noteTakenAt = Optional.empty();
+        }
         return Optional.of(new PlayerSnapshot(
             uuid,
             row.currentUsername(),
-            Optional.ofNullable(row.note()).filter(value -> !value.isBlank()),
+            note,
+            noteTakenAt,
             row.totalMinutes(),
             row.sessionCount(),
             StoreKeys.countPrefix(playDays, prefix),
+            lastPlayedBefore(prefix, LocalDate.now()),
             names,
             servers
         ));
+    }
+
+    private Optional<LocalDate> lastPlayedBefore(String prefix, LocalDate excluded) {
+        LocalDate latest = null;
+        Iterator<String> keys = playDays.keyIterator(prefix);
+        while (keys.hasNext()) {
+            String key = keys.next();
+            if (!key.startsWith(prefix)) {
+                break;
+            }
+            LocalDate day = StoreKeys.playDayOf(key, prefix);
+            if (day.equals(excluded)) {
+                continue;
+            }
+            if (latest == null || day.isAfter(latest)) {
+                latest = day;
+            }
+        }
+        return Optional.ofNullable(latest);
     }
 
     private StoreRows.PlayerRow playerRow(UUID uuid) {
@@ -286,7 +314,7 @@ public final class PlayerDatabase implements AutoCloseable {
         if (playerRow(uuid) != null) {
             return;
         }
-        putPlayer(uuid, new StoreRows.PlayerRow(username, null, 0, 0));
+        putPlayer(uuid, new StoreRows.PlayerRow(username, null, null, 0, 0));
         indexName(uuid, username);
     }
 
@@ -295,7 +323,7 @@ public final class PlayerDatabase implements AutoCloseable {
         if (row == null) {
             return;
         }
-        putPlayer(uuid, new StoreRows.PlayerRow(username, row.note(), row.totalMinutes(), row.sessionCount()));
+        putPlayer(uuid, row.withUsername(username));
         indexName(uuid, username);
     }
 
@@ -332,7 +360,7 @@ public final class PlayerDatabase implements AutoCloseable {
         }
         playSessions.put(key, "1");
         StoreRows.PlayerRow row = playerRow(uuid);
-        putPlayer(uuid, new StoreRows.PlayerRow(row.currentUsername(), row.note(), row.totalMinutes(), row.sessionCount() + 1));
+        putPlayer(uuid, row.plusSession());
     }
 
     private void addMinute(UUID uuid, LocalDate day, String serverId) {
@@ -342,7 +370,7 @@ public final class PlayerDatabase implements AutoCloseable {
         playDays.put(key, Long.toString(minutes));
         addServerMinute(uuid, serverId);
         StoreRows.PlayerRow row = playerRow(uuid);
-        putPlayer(uuid, new StoreRows.PlayerRow(row.currentUsername(), row.note(), row.totalMinutes() + 1, row.sessionCount()));
+        putPlayer(uuid, row.plusMinute());
     }
 
     private void addServerMinute(UUID uuid, String serverId) {

@@ -32,6 +32,9 @@ class PlayerDatabaseTest {
             assertEquals(2, snapshot.daysPlayed());
             assertEquals(2, snapshot.sessionCount());
             assertEquals("builds nice farms", snapshot.note().orElseThrow());
+            assertTrue(snapshot.noteTakenAt().isPresent());
+            assertEquals(LocalDate.of(2026, 8, 2), snapshot.lastPlayedBeforeToday().orElseThrow());
+            assertEquals("hypixel.net", snapshot.mostPlayedServer().orElseThrow().serverId());
             assertTrue(snapshot.pastNames().stream().anyMatch(name -> name.username().equals("Steve")));
             assertEquals(List.of(
                 new ServerPlay("hypixel.net", 2),
@@ -75,6 +78,7 @@ class PlayerDatabaseTest {
             assertEquals(0, snapshot.sessionCount());
             assertTrue(snapshot.names().isEmpty());
             assertTrue(snapshot.note().isPresent());
+            assertTrue(snapshot.noteTakenAt().isPresent());
             assertFalse(snapshot.hasPlayed());
             assertEquals(1, database.findByName("ghost").size());
             assertTrue(snapshot.servers().isEmpty());
@@ -136,6 +140,56 @@ class PlayerDatabaseTest {
             assertEquals("Steve", steve.username());
             assertNull(database.mojangNameCache("nobody").orElseThrow().uuid());
         }
+    }
+
+    @Test
+    void lastPlayedTogetherIgnoresToday() {
+        LocalDate today = LocalDate.now();
+        LocalDate earlier = today.minusDays(5);
+        try (PlayerDatabase database = new PlayerDatabase(temp.resolve("players.mv"))) {
+            UUID uuid = UUID.randomUUID();
+            database.recordLivePlay(uuid, "Steve", earlier, "live:one", "hypixel.net");
+            database.recordLivePlay(uuid, "Steve", earlier, "live:one", "hypixel.net");
+            database.recordLivePlay(uuid, "Steve", today, "live:two", "mc.example.com");
+            PlayerSnapshot snapshot = database.get(uuid).orElseThrow();
+            assertEquals(earlier, snapshot.lastPlayedBeforeToday().orElseThrow());
+            assertEquals("hypixel.net", snapshot.mostPlayedServer().orElseThrow().serverId());
+        }
+    }
+
+    @Test
+    void onlyTodayHasNoEarlierPlayDay() {
+        try (PlayerDatabase database = new PlayerDatabase(temp.resolve("players.mv"))) {
+            UUID uuid = UUID.randomUUID();
+            database.recordLivePlay(uuid, "Steve", LocalDate.now(), "live:one", "hypixel.net");
+            assertTrue(database.get(uuid).orElseThrow().lastPlayedBeforeToday().isEmpty());
+        }
+    }
+
+    @Test
+    void noteTimestampSurvivesPlayUpdates() {
+        try (PlayerDatabase database = new PlayerDatabase(temp.resolve("players.mv"))) {
+            UUID uuid = UUID.randomUUID();
+            database.setNote(uuid, "Steve", "met on Discord");
+            Instant taken = database.get(uuid).orElseThrow().noteTakenAt().orElseThrow();
+            database.recordLivePlay(uuid, "Alex", LocalDate.of(2026, 8, 1), "live:one", "hypixel.net");
+            PlayerSnapshot snapshot = database.get(uuid).orElseThrow();
+            assertEquals("met on Discord", snapshot.note().orElseThrow());
+            assertEquals(taken, snapshot.noteTakenAt().orElseThrow());
+            assertEquals("Alex", snapshot.currentUsername());
+        }
+    }
+
+    @Test
+    void playerRowWithoutNoteTimestampStillLoads() {
+        StoreRows.PlayerRow row = new com.google.gson.Gson().fromJson(
+            "{\"currentUsername\":\"Alex\",\"note\":\"hi\",\"totalMinutes\":1,\"sessionCount\":1}",
+            StoreRows.PlayerRow.class
+        );
+        assertEquals("Alex", row.currentUsername());
+        assertEquals("hi", row.note());
+        assertNull(row.noteTakenAt());
+        assertEquals(1, row.totalMinutes());
     }
 
     @Test
