@@ -27,6 +27,25 @@ class MojangProfileApiTest {
             assertFalse(mojang.needsFetch(uuid, "Steve"));
             assertFalse(mojang.needsFetch(uuid, "steve"));
             assertTrue(mojang.needsFetch(uuid, "Alex"));
+            assertTrue(mojang.matchesCachedName(uuid, "Steve"));
+            assertFalse(mojang.matchesCachedName(uuid, "Alex"));
+        }
+    }
+
+    @Test
+    void cachedUuidMissSkipsFetchUntilStale() {
+        try (PlayerStore players = new PlayerStore(temp.resolve("players.mv"))) {
+            MojangProfileApi mojang = new MojangProfileApi(players.mojangProfiles());
+            UUID uuid = UUID.fromString("00000000-0000-0000-0000-000000000001");
+            players.mojangProfiles().putUuid(uuid, "", Instant.now());
+            assertFalse(mojang.needsFetch(uuid, "NPC"));
+            assertFalse(mojang.matchesCachedName(uuid, "NPC"));
+            assertTrue(mojang.lookupUuid(uuid).isEmpty());
+
+            players.mojangProfiles().putUuid(uuid, "", Instant.now().minus(MojangProfileApi.STALE_AFTER).minusSeconds(1));
+            mojang = new MojangProfileApi(players.mojangProfiles());
+            assertTrue(mojang.needsFetch(uuid, "NPC"));
+            assertFalse(mojang.matchesCachedName(uuid, "NPC"));
         }
     }
 

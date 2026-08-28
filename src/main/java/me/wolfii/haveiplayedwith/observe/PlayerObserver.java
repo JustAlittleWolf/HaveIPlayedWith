@@ -144,8 +144,11 @@ public final class PlayerObserver {
         while (!Thread.currentThread().isInterrupted()) {
             try {
                 Sighting sighting = sightings.take();
-                if (!mojang.needsFetch(sighting.uuid(), sighting.username())) {
+                if (mojang.matchesCachedName(sighting.uuid(), sighting.username())) {
                     credit(sighting);
+                    continue;
+                }
+                if (!mojang.needsFetch(sighting.uuid(), sighting.username())) {
                     continue;
                 }
                 Sighting previous = pendingLookups.put(sighting.uuid(), sighting);
