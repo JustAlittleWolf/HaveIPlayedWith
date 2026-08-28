@@ -34,6 +34,10 @@ final class StoreKeys {
         return uuid + "\t" + day;
     }
 
+    static LocalDate playDayOf(String key, String prefix) {
+        return LocalDate.parse(key.substring(prefix.length()));
+    }
+
     static String server(UUID uuid, String serverId) {
         return uuid + "\t" + serverId;
     }

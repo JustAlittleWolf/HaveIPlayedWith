@@ -27,6 +27,7 @@ public final class QueryMessages {
     public static final int SERVER = 0x5EEAD4;
 
     private static final DateTimeFormatter LAST_SEEN = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm", Locale.ROOT);
+    private static final DateTimeFormatter DATE = DateTimeFormatter.ofPattern("yyyy-MM-dd", Locale.ROOT);
 
     private QueryMessages() {
     }
@@ -50,8 +51,10 @@ public final class QueryMessages {
                 colored(DurationFormat.hover(player.totalMinutes()), DURATION)
             )));
         MutableComponent days = colored(dayLabel(player.daysPlayed()), DAYS)
-            .withStyle(style -> style.withHoverEvent(new HoverEvent.ShowText(sessionsHover(player.sessionCount()))));
-        return gray("haveiplayedwith.query.played", name, duration, days);
+            .withStyle(style -> style.withHoverEvent(new HoverEvent.ShowText(daysHover(player))));
+        MutableComponent sessions = colored(sessionLabel(player.sessionCount()), SESSIONS)
+            .withStyle(style -> style.withHoverEvent(new HoverEvent.ShowText(sessionsHover(player))));
+        return gray("haveiplayedwith.query.played", name, duration, days, sessions);
     }
 
     public static Component pastNames(PlayerSnapshot player) {
@@ -78,8 +81,15 @@ public final class QueryMessages {
         return gray("haveiplayedwith.query.seen_on", join(servers));
     }
 
-    public static Component note(String note) {
-        return gray("haveiplayedwith.note.label", colored(note, NOTE));
+    public static Component note(PlayerSnapshot player) {
+        MutableComponent body = colored(player.note().orElse(""), NOTE);
+        player.noteTakenAt().ifPresent(takenAt -> {
+            String when = LAST_SEEN.format(takenAt.atZone(ZoneId.systemDefault()));
+            body.withStyle(style -> style.withHoverEvent(new HoverEvent.ShowText(
+                gray("haveiplayedwith.note.taken", when)
+            )));
+        });
+        return gray("haveiplayedwith.note.label", body);
     }
 
     public static Component noteSaved(String name) {
@@ -172,11 +182,22 @@ public final class QueryMessages {
             : Component.translatable("haveiplayedwith.query.days", days);
     }
 
-    private static Component sessionsHover(int sessions) {
-        Component count = colored(String.valueOf(sessions), SESSIONS);
+    private static Component sessionLabel(int sessions) {
         return sessions == 1
-            ? Component.translatable("haveiplayedwith.query.sessions.hover.one", count).withStyle(ChatFormatting.GRAY)
-            : Component.translatable("haveiplayedwith.query.sessions.hover", count).withStyle(ChatFormatting.GRAY);
+            ? Component.translatable("haveiplayedwith.query.sessions.one")
+            : Component.translatable("haveiplayedwith.query.sessions", sessions);
+    }
+
+    private static Component daysHover(PlayerSnapshot player) {
+        return player.lastPlayedBeforeToday()
+            .map(day -> gray("haveiplayedwith.query.last_played", DATE.format(day)))
+            .orElseGet(() -> gray("haveiplayedwith.query.last_played.today"));
+    }
+
+    private static Component sessionsHover(PlayerSnapshot player) {
+        return player.mostPlayedServer()
+            .map(server -> gray("haveiplayedwith.query.most_server", colored(server.serverId(), SERVER)))
+            .orElseGet(() -> gray("haveiplayedwith.query.most_server.none"));
     }
 
     private static Component join(List<Component> items) {
