@@ -53,14 +53,6 @@ final class StoreRows {
         }
     }
 
-    record CraftyRow(String uuid, String currentUsername, String usernamesJson, boolean valid, long fetchedAt) {
-        CraftyRow {
-            uuid = emptyIfNull(uuid);
-            currentUsername = emptyIfNull(currentUsername);
-            usernamesJson = usernamesJson == null || usernamesJson.isBlank() ? "[]" : usernamesJson;
-        }
-    }
-
     record ImportRow(long processed, long total, String lastTimestamp, long skip, String status, boolean silenced) {
         ImportRow {
             lastTimestamp = emptyIfNull(lastTimestamp);

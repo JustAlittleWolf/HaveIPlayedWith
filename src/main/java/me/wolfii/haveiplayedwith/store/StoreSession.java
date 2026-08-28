@@ -22,7 +22,6 @@ final class StoreSession implements AutoCloseable {
     final MVMap<String, String> playServers;
     final MVMap<String, String> mojangUuid;
     final MVMap<String, String> mojangName;
-    final MVMap<String, String> crafty;
     final MVMap<String, String> imports;
 
     private StoreSession(StoreWorker worker, MVStore store) {
@@ -35,7 +34,6 @@ final class StoreSession implements AutoCloseable {
         this.playServers = store.openMap("play_servers");
         this.mojangUuid = store.openMap("mojang_uuid");
         this.mojangName = store.openMap("mojang_name");
-        this.crafty = store.openMap("crafty");
         this.imports = store.openMap("import_progress");
     }
 

@@ -8,6 +8,7 @@ import me.wolfii.haveiplayedwith.chat.ImportMessages;
 import me.wolfii.haveiplayedwith.crafty.CraftyNameHistory;
 import me.wolfii.haveiplayedwith.crafty.CraftyPlayer;
 import me.wolfii.haveiplayedwith.crafty.CraftyPlayerApi;
+import me.wolfii.haveiplayedwith.mojang.MojangProfileApi;
 import me.wolfii.haveiplayedwith.store.ImportProgress;
 import me.wolfii.haveiplayedwith.store.PlayerStore;
 import org.slf4j.Logger;
@@ -29,6 +30,7 @@ public final class AllTheLogsImporter {
     private static final long REPORT_INTERVAL_NANOS = 15_000_000_000L;
     private final PlayerStore players;
     private final CraftyPlayerApi crafty;
+    private final MojangProfileApi mojang;
     private final ImportControls controls;
     private final ExecutorService worker = Executors.newSingleThreadExecutor(runnable -> {
         Thread thread = new Thread(runnable, "haveiplayedwith-import");
@@ -36,9 +38,10 @@ public final class AllTheLogsImporter {
         return thread;
     });
 
-    public AllTheLogsImporter(PlayerStore players, CraftyPlayerApi crafty, ImportControls controls) {
+    public AllTheLogsImporter(PlayerStore players, CraftyPlayerApi crafty, MojangProfileApi mojang, ImportControls controls) {
         this.players = players;
         this.crafty = crafty;
+        this.mojang = mojang;
         this.controls = controls;
     }
 
@@ -177,6 +180,7 @@ public final class AllTheLogsImporter {
         if (!held) {
             return;
         }
+        mojang.rememberCurrent(resolved.uuid(), resolved.currentUsername());
         players.recordImportedSighting(
             resolved.uuid(),
             username.get(),
