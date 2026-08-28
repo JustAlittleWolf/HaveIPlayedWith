@@ -22,9 +22,9 @@ class PlayerDatabaseTest {
 	void recordsPlayAndFindsPastNames() {
 		try (PlayerDatabase database = new PlayerDatabase(temp.resolve("players.mv"))) {
 			UUID uuid = UUID.fromString("61699b2e-d327-4a01-9f1e-0ea8c3f06bc6");
-			database.recordLivePlay(uuid, "Steve", LocalDate.of(2026, 8, 1), "live:one");
-			database.recordLivePlay(uuid, "Steve", LocalDate.of(2026, 8, 1), "live:one");
-			database.recordLivePlay(uuid, "Alex", LocalDate.of(2026, 8, 2), "live:two");
+			database.recordLivePlay(uuid, "Steve", LocalDate.of(2026, 8, 1), "live:one", "hypixel.net");
+			database.recordLivePlay(uuid, "Steve", LocalDate.of(2026, 8, 1), "live:one", "hypixel.net");
+			database.recordLivePlay(uuid, "Alex", LocalDate.of(2026, 8, 2), "live:two", "world/Survival");
 			database.setNote(uuid, "Alex", "builds nice farms");
 
 			List<PlayerSnapshot> byOld = database.findByName("steve");
@@ -36,6 +36,10 @@ class PlayerDatabaseTest {
 			assertEquals(2, snapshot.sessionCount());
 			assertEquals("builds nice farms", snapshot.note().orElseThrow());
 			assertTrue(snapshot.pastNames().stream().anyMatch(name -> name.username().equals("Steve")));
+			assertEquals(List.of(
+				new ServerPlay("hypixel.net", 2),
+				new ServerPlay("world/Survival", 1)
+			), snapshot.servers());
 		}
 	}
 
@@ -49,6 +53,7 @@ class PlayerDatabaseTest {
 			assertEquals(1, snapshot.daysPlayed());
 			assertEquals("Current", snapshot.currentUsername());
 			assertEquals("OldName", snapshot.pastNames().getFirst().username());
+			assertTrue(snapshot.servers().isEmpty());
 		}
 	}
 
@@ -75,6 +80,37 @@ class PlayerDatabaseTest {
 			assertTrue(snapshot.note().isPresent());
 			assertFalse(snapshot.hasPlayed());
 			assertEquals(1, database.findByName("ghost").size());
+			assertTrue(snapshot.servers().isEmpty());
+		}
+	}
+
+	@Test
+	void serverMinutesPersistAcrossReopen() {
+		UUID uuid = UUID.randomUUID();
+		try (PlayerDatabase database = new PlayerDatabase(temp.resolve("players.mv"))) {
+			database.recordLivePlay(uuid, "Steve", LocalDate.of(2026, 8, 1), "live:one", "world/Creative");
+			database.recordLivePlay(uuid, "Steve", LocalDate.of(2026, 8, 1), "live:one", "world/Creative");
+			database.recordLivePlay(uuid, "Steve", LocalDate.of(2026, 8, 2), "live:two", "mc.example.com:25566");
+		}
+		try (PlayerDatabase database = new PlayerDatabase(temp.resolve("players.mv"))) {
+			PlayerSnapshot snapshot = database.get(uuid).orElseThrow();
+			assertEquals(3, snapshot.totalMinutes());
+			assertEquals(List.of(
+				new ServerPlay("world/Creative", 2),
+				new ServerPlay("mc.example.com:25566", 1)
+			), snapshot.servers());
+		}
+	}
+
+	@Test
+	void blankServerIdDoesNotCreateAServerRow() {
+		try (PlayerDatabase database = new PlayerDatabase(temp.resolve("players.mv"))) {
+			UUID uuid = UUID.randomUUID();
+			database.recordLivePlay(uuid, "Steve", LocalDate.of(2026, 8, 1), "live:one", null);
+			database.recordLivePlay(uuid, "Steve", LocalDate.of(2026, 8, 1), "live:one", " ");
+			PlayerSnapshot snapshot = database.get(uuid).orElseThrow();
+			assertEquals(2, snapshot.totalMinutes());
+			assertTrue(snapshot.servers().isEmpty());
 		}
 	}
 

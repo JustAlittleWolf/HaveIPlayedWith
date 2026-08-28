@@ -41,7 +41,7 @@ public final class PlayerObserver {
 	private static final int MAX_SIGHTING_BUFFER = 2048;
 	private static final long CREDIT_MEMORY_MINUTES = 60;
 
-	private record Sighting(UUID uuid, String username, LocalDate day, long epochMinute, String sessionId) {
+	private record Sighting(UUID uuid, String username, LocalDate day, long epochMinute, String sessionId, String serverId) {
 	}
 
 	private final PlayerDatabase database;
@@ -55,6 +55,7 @@ public final class PlayerObserver {
 	private final ConcurrentHashMap<UUID, String> noticedThisMinute = new ConcurrentHashMap<>();
 	private volatile long currentMinute = Long.MIN_VALUE;
 	private volatile String sessionId;
+	private volatile String locationId;
 
 	public PlayerObserver(PlayerDatabase database, MojangClient mojang) {
 		this.database = database;
@@ -64,9 +65,13 @@ public final class PlayerObserver {
 	}
 
 	public void register() {
-		ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> sessionId = UUID.randomUUID().toString());
+		ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> {
+			sessionId = UUID.randomUUID().toString();
+			locationId = PlayLocations.current(client);
+		});
 		ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
 			sessionId = null;
+			locationId = null;
 			creditedMinute.clear();
 			noticedThisMinute.clear();
 			currentMinute = Long.MIN_VALUE;
@@ -90,17 +95,18 @@ public final class PlayerObserver {
 			creditedMinute.values().removeIf(minute -> minute < epochMinute - CREDIT_MEMORY_MINUTES);
 		}
 		String session = session();
+		String serverId = location(client);
 		LocalDate day = LocalDate.now();
 		Set<UUID> seen = new HashSet<>();
 		ClientPacketListener connection = client.getConnection();
 		for (PlayerInfo info : connection.getListedOnlinePlayers()) {
-			offer(info.getProfile(), day, epochMinute, session, seen);
+			offer(info.getProfile(), day, epochMinute, session, serverId, seen);
 		}
 		for (AbstractClientPlayer player : client.level.players()) {
-			offer(player.getGameProfile(), day, epochMinute, session, seen);
+			offer(player.getGameProfile(), day, epochMinute, session, serverId, seen);
 		}
 		LocalPlayer self = client.player;
-		offer(self.getGameProfile(), day, epochMinute, session, seen);
+		offer(self.getGameProfile(), day, epochMinute, session, serverId, seen);
 	}
 
 	private String session() {
@@ -113,7 +119,19 @@ public final class PlayerObserver {
 		return fresh;
 	}
 
-	private void offer(GameProfile profile, LocalDate day, long epochMinute, String session, Set<UUID> seen) {
+	private String location(Minecraft client) {
+		String current = locationId;
+		if (current != null) {
+			return current;
+		}
+		String resolved = PlayLocations.current(client);
+		if (resolved != null) {
+			locationId = resolved;
+		}
+		return resolved;
+	}
+
+	private void offer(GameProfile profile, LocalDate day, long epochMinute, String session, String serverId, Set<UUID> seen) {
 		if (profile == null) {
 			return;
 		}
@@ -129,7 +147,7 @@ public final class PlayerObserver {
 			return;
 		}
 		noticedThisMinute.put(uuid, name);
-		if (!sightings.offer(new Sighting(uuid, name, day, epochMinute, session))) {
+		if (!sightings.offer(new Sighting(uuid, name, day, epochMinute, session, serverId))) {
 			noticedThisMinute.remove(uuid, name);
 		}
 	}
@@ -174,7 +192,7 @@ public final class PlayerObserver {
 				if (!profile.get().username().equals(sighting.username())) {
 					database.applyMojangUsername(uuid, profile.get().username(), Instant.now());
 				}
-				credit(new Sighting(uuid, profile.get().username(), sighting.day(), sighting.epochMinute(), sighting.sessionId()));
+				credit(new Sighting(uuid, profile.get().username(), sighting.day(), sighting.epochMinute(), sighting.sessionId(), sighting.serverId()));
 			} catch (InterruptedException e) {
 				Thread.currentThread().interrupt();
 				return;
@@ -190,7 +208,7 @@ public final class PlayerObserver {
 			database.applyMojangUsername(sighting.uuid(), sighting.username(), Instant.now());
 			return;
 		}
-		database.recordLivePlay(sighting.uuid(), sighting.username(), sighting.day(), "live:" + sighting.sessionId());
+		database.recordLivePlay(sighting.uuid(), sighting.username(), sighting.day(), "live:" + sighting.sessionId(), sighting.serverId());
 	}
 
 	private static ThreadFactory named(String name) {

@@ -11,10 +11,12 @@ public record PlayerSnapshot(
 	long totalMinutes,
 	int sessionCount,
 	int daysPlayed,
-	List<SeenName> names
+	List<SeenName> names,
+	List<ServerPlay> servers
 ) {
 	public PlayerSnapshot {
 		names = List.copyOf(names);
+		servers = List.copyOf(servers);
 	}
 
 	public List<SeenName> pastNames() {

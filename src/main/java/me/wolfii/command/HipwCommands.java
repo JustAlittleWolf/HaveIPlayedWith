@@ -108,6 +108,9 @@ public final class HipwCommands {
 				PlayerSnapshot latest = database.get(match.uuid()).orElse(match);
 				if (latest.hasPlayed()) {
 					tell(source, QueryMessages.playedWith(latest));
+					if (!latest.servers().isEmpty()) {
+						tell(source, QueryMessages.seenOn(latest));
+					}
 					if (!latest.pastNames().isEmpty()) {
 						tell(source, QueryMessages.pastNames(latest));
 					}
