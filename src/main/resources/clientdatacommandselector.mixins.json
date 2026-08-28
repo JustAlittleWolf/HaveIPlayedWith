@@ -1,0 +1,13 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "me.wolfii.clientdatacommandselector.mixin",
+  "compatibilityLevel": "JAVA_25",
+  "client": [
+    "EntityArgumentMixin",
+    "EntitySelectorMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

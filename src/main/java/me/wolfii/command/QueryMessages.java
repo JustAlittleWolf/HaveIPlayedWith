@@ -9,6 +9,7 @@ import net.minecraft.network.chat.*;
 import java.net.URI;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
@@ -35,121 +36,163 @@ public final class QueryMessages {
     }
 
     public static Component notPlayedWith(String name, UUID uuid) {
-        return Component.literal("You have not played with ").withStyle(ChatFormatting.GRAY)
-            .append(clickableName(name, UNKNOWN, true, uuid))
-            .append(Component.literal(".").withStyle(ChatFormatting.GRAY));
+        return gray("haveiplayedwith.query.not_played", clickableName(name, UNKNOWN, true, uuid));
+    }
+
+    public static Component noMatchingPlayers() {
+        return gray("haveiplayedwith.query.no_players");
     }
 
     public static Component playedWith(PlayerSnapshot player) {
         MutableComponent name = clickableName(player.currentUsername(), NAME, false, player.uuid());
         MutableComponent duration = colored(DurationFormat.compact(player.totalMinutes()), DURATION)
             .withStyle(style -> style.withHoverEvent(new HoverEvent.ShowText(
-                Component.literal(DurationFormat.hover(player.totalMinutes())).withStyle(style1 -> style1.withColor(rgb(DURATION)))
+                colored(DurationFormat.hover(player.totalMinutes()), DURATION)
             )));
-        String dayLabel = player.daysPlayed() == 1 ? "1 day" : player.daysPlayed() + " days";
-        MutableComponent days = colored(dayLabel, DAYS)
-            .withStyle(style -> style.withHoverEvent(new HoverEvent.ShowText(
-                Component.literal("across ").withStyle(ChatFormatting.GRAY)
-                    .append(colored(String.valueOf(player.sessionCount()), SESSIONS))
-                    .append(Component.literal(player.sessionCount() == 1 ? " session" : " sessions").withStyle(ChatFormatting.GRAY))
-            )));
-        return Component.literal("You have played with ").withStyle(ChatFormatting.GRAY)
-            .append(name)
-            .append(Component.literal(" for ").withStyle(ChatFormatting.GRAY))
-            .append(duration)
-            .append(Component.literal(" across ").withStyle(ChatFormatting.GRAY))
-            .append(days)
-            .append(Component.literal(".").withStyle(ChatFormatting.GRAY));
+        MutableComponent days = colored(dayLabel(player.daysPlayed()), DAYS)
+            .withStyle(style -> style.withHoverEvent(new HoverEvent.ShowText(sessionsHover(player.sessionCount()))));
+        return gray("haveiplayedwith.query.played", name, duration, days);
     }
 
     public static Component pastNames(PlayerSnapshot player) {
         List<SeenName> past = player.pastNames();
-        MutableComponent line = Component.literal("You have also seen them as ").withStyle(ChatFormatting.GRAY);
-        for (int i = 0; i < past.size(); i++) {
-            SeenName seen = past.get(i);
-            if (i > 0) {
-                if (i == past.size() - 1) {
-                    line.append(Component.literal(" and ").withStyle(ChatFormatting.GRAY));
-                } else {
-                    line.append(Component.literal(", ").withStyle(ChatFormatting.GRAY));
-                }
-            }
+        List<Component> names = new ArrayList<>(past.size());
+        for (SeenName seen : past) {
             String when = LAST_SEEN.format(seen.lastSeen().atZone(ZoneId.systemDefault()));
-            line.append(colored(seen.username(), PAST_NAME).withStyle(style -> style.withHoverEvent(
-                new HoverEvent.ShowText(Component.literal("Last seen as " + seen.username() + " at " + when)
+            names.add(colored(seen.username(), PAST_NAME).withStyle(style -> style.withHoverEvent(
+                new HoverEvent.ShowText(Component.translatable("haveiplayedwith.query.past_name.hover", seen.username(), when)
                     .withStyle(style1 -> style1.withColor(rgb(PAST_NAME))))
             )));
         }
-        line.append(Component.literal(" in the past.").withStyle(ChatFormatting.GRAY));
-        return line;
+        return gray("haveiplayedwith.query.past_names", join(names));
     }
 
     public static Component seenOn(PlayerSnapshot player) {
-        List<ServerPlay> servers = player.servers();
-        MutableComponent line = Component.literal("You have seen them on ").withStyle(ChatFormatting.GRAY);
-        for (int i = 0; i < servers.size(); i++) {
-            ServerPlay server = servers.get(i);
-            if (i > 0) {
-                if (i == servers.size() - 1) {
-                    line.append(Component.literal(" and ").withStyle(ChatFormatting.GRAY));
-                } else {
-                    line.append(Component.literal(", ").withStyle(ChatFormatting.GRAY));
-                }
-            }
-            line.append(colored(server.serverId(), SERVER).withStyle(style -> style.withHoverEvent(
-                new HoverEvent.ShowText(Component.literal(DurationFormat.hover(server.minutes()))
-                    .withStyle(style1 -> style1.withColor(rgb(DURATION))))
-            )));
-            line.append(Component.literal(" (").withStyle(ChatFormatting.GRAY));
-            line.append(colored(DurationFormat.compact(server.minutes()), DURATION));
-            line.append(Component.literal(")").withStyle(ChatFormatting.GRAY));
+        List<Component> servers = new ArrayList<>(player.servers().size());
+        for (ServerPlay server : player.servers()) {
+            MutableComponent id = colored(server.serverId(), SERVER).withStyle(style -> style.withHoverEvent(
+                new HoverEvent.ShowText(colored(DurationFormat.hover(server.minutes()), DURATION))
+            ));
+            servers.add(gray("haveiplayedwith.query.server.entry", id, colored(DurationFormat.compact(server.minutes()), DURATION)));
         }
-        line.append(Component.literal(".").withStyle(ChatFormatting.GRAY));
-        return line;
+        return gray("haveiplayedwith.query.seen_on", join(servers));
     }
 
     public static Component note(String note) {
-        return Component.literal("Note: ").withStyle(ChatFormatting.GRAY)
-            .append(colored(note, NOTE));
+        return gray("haveiplayedwith.note.label", colored(note, NOTE));
     }
 
     public static Component noteSaved(String name) {
-        return Component.literal("Saved note for ").withStyle(ChatFormatting.GRAY)
-            .append(clickableName(name, NAME, false, null))
-            .append(Component.literal(".").withStyle(ChatFormatting.GRAY));
+        return gray("haveiplayedwith.note.saved", clickableName(name, NAME, false, null));
     }
 
     public static Component noteConfirm(String name, UUID uuid) {
-        MutableComponent click = Component.literal("Click here").withStyle(style -> style
+        MutableComponent click = Component.translatable("haveiplayedwith.note.confirm.click").withStyle(style -> style
             .withColor(rgb(CONFIRM))
             .withUnderlined(true)
             .withClickEvent(new ClickEvent.RunCommand("/playernote confirm"))
-            .withHoverEvent(new HoverEvent.ShowText(Component.literal("Save this note for " + name).withStyle(ChatFormatting.GRAY)))
+            .withHoverEvent(new HoverEvent.ShowText(
+                Component.translatable("haveiplayedwith.note.confirm.hover", name).withStyle(ChatFormatting.GRAY)
+            ))
         );
-        return Component.literal("You have not played with ").withStyle(ChatFormatting.GRAY)
-            .append(clickableName(name, UNKNOWN, true, uuid))
-            .append(Component.literal(" yet. ").withStyle(ChatFormatting.GRAY))
-            .append(click)
-            .append(Component.literal(" to save this note anyway.").withStyle(ChatFormatting.GRAY));
+        return gray("haveiplayedwith.note.confirm", clickableName(name, UNKNOWN, true, uuid), click);
     }
 
     public static Component nothingToConfirm() {
-        return Component.literal("There is no pending player note to confirm.").withStyle(ChatFormatting.GRAY);
+        return gray("haveiplayedwith.note.nothing");
     }
 
     public static Component unknownAccount(String name) {
-        return Component.literal("Could not find a Minecraft account named ").withStyle(ChatFormatting.GRAY)
-            .append(clickableName(name, UNKNOWN, true, null))
-            .append(Component.literal(".").withStyle(ChatFormatting.GRAY));
+        return gray("haveiplayedwith.query.unknown_account", clickableName(name, UNKNOWN, true, null));
     }
 
-    public static Component importStatus(String message) {
-        return Component.literal(message).withStyle(ChatFormatting.GRAY);
+    public static Component importNotRunning() {
+        return gray("haveiplayedwith.import.not_running");
+    }
+
+    public static Component importStopping() {
+        return gray("haveiplayedwith.import.stopping");
+    }
+
+    public static Component importSilenced() {
+        return gray("haveiplayedwith.import.silenced");
+    }
+
+    public static Component importUnsilenced() {
+        return gray("haveiplayedwith.import.unsilenced");
+    }
+
+    public static Component importStillRunning(long processed, long total) {
+        if (total > 0) {
+            return gray("haveiplayedwith.import.still_running.counts", processed, total);
+        }
+        return gray("haveiplayedwith.import.still_running.messages", processed);
+    }
+
+    public static Component importStopped(long processed) {
+        return gray("haveiplayedwith.import.stopped", processed);
+    }
+
+    public static Component importResuming() {
+        return gray("haveiplayedwith.import.resuming");
+    }
+
+    public static Component importAlreadyRunning() {
+        return gray("haveiplayedwith.import.already_running");
+    }
+
+    public static Component importStarting() {
+        return gray("haveiplayedwith.import.starting");
+    }
+
+    public static Component importNotReady() {
+        return gray("haveiplayedwith.import.not_ready");
+    }
+
+    public static Component importFinished(long processed) {
+        return gray("haveiplayedwith.import.finished", processed);
+    }
+
+    public static Component importFailed() {
+        return gray("haveiplayedwith.import.failed");
+    }
+
+    public static Component importProgress(long processed, long total) {
+        int percent = (int) Math.min(100, (processed * 100) / total);
+        return gray("haveiplayedwith.import.progress.counts", processed, total, percent);
+    }
+
+    public static Component importProgressMessages(long processed) {
+        return gray("haveiplayedwith.import.progress.messages", processed);
+    }
+
+    private static Component dayLabel(int days) {
+        return days == 1
+            ? Component.translatable("haveiplayedwith.query.days.one")
+            : Component.translatable("haveiplayedwith.query.days", days);
+    }
+
+    private static Component sessionsHover(int sessions) {
+        Component count = colored(String.valueOf(sessions), SESSIONS);
+        return sessions == 1
+            ? Component.translatable("haveiplayedwith.query.sessions.hover.one", count).withStyle(ChatFormatting.GRAY)
+            : Component.translatable("haveiplayedwith.query.sessions.hover", count).withStyle(ChatFormatting.GRAY);
+    }
+
+    private static Component join(List<Component> items) {
+        MutableComponent result = Component.empty();
+        for (int i = 0; i < items.size(); i++) {
+            if (i > 0) {
+                result.append(gray(i == items.size() - 1 ? "haveiplayedwith.list.and" : "haveiplayedwith.list.comma"));
+            }
+            result.append(items.get(i));
+        }
+        return result;
     }
 
     private static MutableComponent clickableName(String name, int color, boolean italic, UUID uuid) {
         MutableComponent hover = uuid == null
-            ? Component.literal("Open NameMC").withStyle(ChatFormatting.GRAY)
+            ? gray("haveiplayedwith.namemc.open")
             : Component.literal(uuid.toString()).withStyle(style -> style.withColor(rgb(UUID_COLOR)));
         return Component.literal(name).withStyle(style -> style
             .withColor(rgb(color))
@@ -161,6 +204,14 @@ public final class QueryMessages {
 
     private static MutableComponent colored(String text, int color) {
         return Component.literal(text).withStyle(style -> style.withColor(rgb(color)));
+    }
+
+    private static MutableComponent colored(Component text, int color) {
+        return text.copy().withStyle(style -> style.withColor(rgb(color)));
+    }
+
+    private static MutableComponent gray(String key, Object... args) {
+        return Component.translatable(key, args).withStyle(ChatFormatting.GRAY);
     }
 
     private static TextColor rgb(int color) {
