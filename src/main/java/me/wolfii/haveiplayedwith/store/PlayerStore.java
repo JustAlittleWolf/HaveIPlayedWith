@@ -12,8 +12,7 @@ import java.util.UUID;
 
 /**
  * Single-file store for players you've been around, backed by H2 MVStore (pure Java, ~350 KB).
- * MVStore is a transactional B-tree; rows are packed binary values and counters are longs,
- * not JSON documents. Each logical write is committed from the database thread, not the client thread.
+ * Each logical write is committed from the database thread, not the client thread.
  */
 public final class PlayerStore implements AutoCloseable {
     private final StoreSession session;
@@ -113,15 +112,13 @@ public final class PlayerStore implements AutoCloseable {
     }
 
     private List<PlayerSnapshot> findByNameOnThread(String name) {
-        String prefix = StoreKeys.nameIndexPrefix(name);
+        String raw = session.nameIndex.get(StoreKeys.nameIndex(name));
+        if (raw == null) {
+            return List.of();
+        }
         List<PlayerSnapshot> snapshots = new ArrayList<>();
-        Iterator<String> keys = session.nameIndex.keyIterator(prefix);
-        while (keys.hasNext()) {
-            String key = keys.next();
-            if (!key.startsWith(prefix)) {
-                break;
-            }
-            loadSnapshot(StoreKeys.nameIndexUuid(key, prefix)).ifPresent(snapshots::add);
+        for (String id : session.gson().fromJson(raw, String[].class)) {
+            loadSnapshot(UUID.fromString(id)).ifPresent(snapshots::add);
         }
         return snapshots;
     }
@@ -140,7 +137,7 @@ public final class PlayerStore implements AutoCloseable {
             if (!key.startsWith(prefix)) {
                 break;
             }
-            servers.add(new ServerPlay(key.substring(prefix.length()), session.playServers.get(key)));
+            servers.add(new ServerPlay(key.substring(prefix.length()), Long.parseLong(session.playServers.get(key))));
         }
         servers.sort(Comparator.comparingLong(ServerPlay::minutes).reversed().thenComparing(ServerPlay::serverId));
         Optional<String> note = Optional.of(row.note()).filter(value -> !value.isBlank());
@@ -170,7 +167,7 @@ public final class PlayerStore implements AutoCloseable {
             if (!key.startsWith(prefix)) {
                 break;
             }
-            StoreRows.HistoryRow seen = StoreCodec.history(session.history.get(key));
+            StoreRows.HistoryRow seen = session.gson().fromJson(session.history.get(key), StoreRows.HistoryRow.class);
             names.add(new SeenName(seen.username(), Instant.ofEpochMilli(seen.lastSeen())));
         }
         names.sort(Comparator.comparing(SeenName::lastSeen).reversed());
@@ -212,12 +209,12 @@ public final class PlayerStore implements AutoCloseable {
     }
 
     private StoreRows.PlayerRow playerRow(UUID uuid) {
-        byte[] raw = session.players.get(StoreKeys.uuid(uuid));
-        return raw == null ? null : StoreCodec.player(raw);
+        String raw = session.players.get(StoreKeys.uuid(uuid));
+        return raw == null ? null : session.gson().fromJson(raw, StoreRows.PlayerRow.class);
     }
 
     private void putPlayer(UUID uuid, StoreRows.PlayerRow row) {
-        session.players.put(StoreKeys.uuid(uuid), StoreCodec.player(row));
+        session.players.put(StoreKeys.uuid(uuid), session.gson().toJson(row));
     }
 
     private void ensurePlayerRow(UUID uuid, String username) {
@@ -239,21 +236,28 @@ public final class PlayerStore implements AutoCloseable {
 
     private void touchUsername(UUID uuid, String username, Instant seenAt) {
         String key = StoreKeys.history(uuid, username);
-        byte[] raw = session.history.get(key);
+        String raw = session.history.get(key);
         long millis = seenAt.toEpochMilli();
         if (raw != null) {
-            StoreRows.HistoryRow existing = StoreCodec.history(raw);
+            StoreRows.HistoryRow existing = session.gson().fromJson(raw, StoreRows.HistoryRow.class);
             if (existing.lastSeen() >= millis) {
                 indexName(uuid, existing.username());
                 return;
             }
         }
-        session.history.put(key, StoreCodec.history(new StoreRows.HistoryRow(username, millis)));
+        session.history.put(key, session.gson().toJson(new StoreRows.HistoryRow(username, millis)));
         indexName(uuid, username);
     }
 
     private void indexName(UUID uuid, String username) {
-        session.nameIndex.putIfAbsent(StoreKeys.nameIndex(username, uuid), 1L);
+        String key = StoreKeys.nameIndex(username);
+        String id = uuid.toString();
+        String raw = session.nameIndex.get(key);
+        List<String> ids = raw == null ? new ArrayList<>() : new ArrayList<>(List.of(session.gson().fromJson(raw, String[].class)));
+        if (!ids.contains(id)) {
+            ids.add(id);
+            session.nameIndex.put(key, session.gson().toJson(ids));
+        }
     }
 
     private void addSession(UUID uuid, String sessionId) {
@@ -261,7 +265,7 @@ public final class PlayerStore implements AutoCloseable {
         if (session.playSessions.containsKey(key)) {
             return;
         }
-        session.playSessions.put(key, 1L);
+        session.playSessions.put(key, "1");
         StoreRows.PlayerRow row = playerRow(uuid);
         putPlayer(uuid, row.plusSession());
     }
@@ -269,8 +273,8 @@ public final class PlayerStore implements AutoCloseable {
     private void addMinute(UUID uuid, LocalDate day, String serverId) {
         ensurePlayDay(uuid, day);
         String key = StoreKeys.playDay(uuid, day);
-        long minutes = session.playDays.get(key) + 1;
-        session.playDays.put(key, minutes);
+        long minutes = Long.parseLong(session.playDays.get(key)) + 1;
+        session.playDays.put(key, Long.toString(minutes));
         addServerMinute(uuid, serverId);
         StoreRows.PlayerRow row = playerRow(uuid);
         putPlayer(uuid, row.plusMinute());
@@ -281,12 +285,12 @@ public final class PlayerStore implements AutoCloseable {
             return;
         }
         String key = StoreKeys.server(uuid, serverId);
-        Long raw = session.playServers.get(key);
-        long minutes = raw == null ? 1 : raw + 1;
-        session.playServers.put(key, minutes);
+        String raw = session.playServers.get(key);
+        long minutes = raw == null ? 1 : Long.parseLong(raw) + 1;
+        session.playServers.put(key, Long.toString(minutes));
     }
 
     private void ensurePlayDay(UUID uuid, LocalDate day) {
-        session.playDays.putIfAbsent(StoreKeys.playDay(uuid, day), 0L);
+        session.playDays.putIfAbsent(StoreKeys.playDay(uuid, day), "0");
     }
 }

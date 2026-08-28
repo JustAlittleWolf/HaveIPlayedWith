@@ -1,5 +1,6 @@
 package me.wolfii.haveiplayedwith.store;
 
+import com.google.gson.Gson;
 import org.h2.mvstore.MVMap;
 import org.h2.mvstore.MVStore;
 
@@ -11,30 +12,31 @@ import java.util.concurrent.Callable;
  * Opened MVStore maps plus the single worker thread that may touch them.
  */
 final class StoreSession implements AutoCloseable {
+    private static final Gson GSON = new Gson();
     private final StoreWorker worker;
-    final MVMap<String, byte[]> players;
-    final MVMap<String, byte[]> history;
-    final MVMap<String, Long> nameIndex;
-    final MVMap<String, Long> playDays;
-    final MVMap<String, Long> playSessions;
-    final MVMap<String, Long> playServers;
-    final MVMap<String, byte[]> mojangUuid;
-    final MVMap<String, byte[]> mojangName;
-    final MVMap<String, byte[]> crafty;
-    final MVMap<String, byte[]> imports;
+    final MVMap<String, String> players;
+    final MVMap<String, String> history;
+    final MVMap<String, String> nameIndex;
+    final MVMap<String, String> playDays;
+    final MVMap<String, String> playSessions;
+    final MVMap<String, String> playServers;
+    final MVMap<String, String> mojangUuid;
+    final MVMap<String, String> mojangName;
+    final MVMap<String, String> crafty;
+    final MVMap<String, String> imports;
 
     private StoreSession(StoreWorker worker, MVStore store) {
         this.worker = worker;
-        this.players = StoreMaps.bytes(store, StoreMaps.PLAYERS);
-        this.history = StoreMaps.bytes(store, StoreMaps.HISTORY);
-        this.nameIndex = StoreMaps.longs(store, StoreMaps.NAME_INDEX);
-        this.playDays = StoreMaps.longs(store, StoreMaps.PLAY_DAYS);
-        this.playSessions = StoreMaps.longs(store, StoreMaps.PLAY_SESSIONS);
-        this.playServers = StoreMaps.longs(store, StoreMaps.PLAY_SERVERS);
-        this.mojangUuid = StoreMaps.bytes(store, StoreMaps.MOJANG_UUID);
-        this.mojangName = StoreMaps.bytes(store, StoreMaps.MOJANG_NAME);
-        this.crafty = StoreMaps.bytes(store, StoreMaps.CRAFTY);
-        this.imports = StoreMaps.bytes(store, StoreMaps.IMPORTS);
+        this.players = store.openMap("players");
+        this.history = store.openMap("username_history");
+        this.nameIndex = store.openMap("name_index");
+        this.playDays = store.openMap("play_days");
+        this.playSessions = store.openMap("play_sessions");
+        this.playServers = store.openMap("play_servers");
+        this.mojangUuid = store.openMap("mojang_uuid");
+        this.mojangName = store.openMap("mojang_name");
+        this.crafty = store.openMap("crafty");
+        this.imports = store.openMap("import_progress");
     }
 
     static StoreSession open(Path file) {
@@ -49,6 +51,10 @@ final class StoreSession implements AutoCloseable {
         } catch (Exception e) {
             throw new IllegalStateException("Failed to open HaveIPlayedWith database at " + file, e);
         }
+    }
+
+    Gson gson() {
+        return GSON;
     }
 
     <T> T call(Callable<T> task) {

@@ -188,9 +188,11 @@ class PlayerStoreTest {
         assertEquals("Alex", row.currentUsername());
         assertEquals("", row.note());
         assertEquals(0L, row.noteTakenAt());
-        StoreRows.PlayerRow decoded = StoreCodec.player(StoreCodec.player(row));
-        assertEquals("", decoded.note());
-        assertEquals(0L, decoded.noteTakenAt());
+        String json = new com.google.gson.Gson().toJson(row);
+        assertFalse(json.contains("null"));
+        StoreRows.PlayerRow parsed = new com.google.gson.Gson().fromJson(json, StoreRows.PlayerRow.class);
+        assertEquals("", parsed.note());
+        assertEquals(0L, parsed.noteTakenAt());
     }
 
     @Test
