@@ -192,8 +192,8 @@ public final class MojangProfileApi {
     }
 
     private NameAnswer fetchName(String username) {
-        String encoded = URLEncoder.encode(username, StandardCharsets.UTF_8);
         try {
+            String encoded = URLEncoder.encode(username, StandardCharsets.UTF_8);
             return switch (api.get(NAME_LOOKUP + encoded)) {
                 case JsonAnswer.Body body -> new NameAnswer(readProfile(body.json()), true);
                 case JsonAnswer.Missing ignored -> new NameAnswer(Optional.empty(), true);

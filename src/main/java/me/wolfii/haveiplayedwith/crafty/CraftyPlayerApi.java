@@ -127,8 +127,8 @@ public final class CraftyPlayerApi {
     }
 
     private Optional<List<CraftyPlayer>> fetchOwners(String username) {
-        String url = USERNAMES + URLEncoder.encode(username, StandardCharsets.UTF_8);
         try {
+            String url = USERNAMES + URLEncoder.encode(username, StandardCharsets.UTF_8);
             return switch (api.get(url)) {
                 case JsonAnswer.Body body -> loadAll(ownerUuids(body.json()));
                 case JsonAnswer.Missing ignored -> Optional.of(List.of());
