@@ -7,17 +7,34 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
 
 /**
  * Crafty returns name history newest-first. A name is held from its {@code changed_at}
- * (or the beginning of time when that is null) until the next newer change.
+ * (or the beginning of time when that is null) until the next newer change. Appearing
+ * anywhere on the list is not enough: the sighting time has to fall in that interval.
  */
 public final class CraftyNameHistory {
     private CraftyNameHistory() {
     }
 
+    public static Optional<CraftyPlayer> holderAt(List<CraftyPlayer> candidates, String username, Instant at) {
+        if (candidates == null || username == null || at == null) {
+            return Optional.empty();
+        }
+        for (CraftyPlayer player : candidates) {
+            if (player == null || !player.valid() || player.uuid() == null) {
+                continue;
+            }
+            if (heldNameAt(player.history(), username, at)) {
+                return Optional.of(player);
+            }
+        }
+        return Optional.empty();
+    }
+
     public static boolean heldNameAt(List<Entry> history, String username, Instant at) {
-        if (username == null || at == null) {
+        if (username == null || at == null || history == null || history.isEmpty()) {
             return false;
         }
         List<Entry> sorted = new ArrayList<>(history);

@@ -5,7 +5,6 @@ import me.wolfii.allthelogs.api.ChatEntry;
 import me.wolfii.allthelogs.api.ChatQuery;
 import me.wolfii.allthelogs.api.LogDatabase;
 import me.wolfii.haveiplayedwith.chat.ImportMessages;
-import me.wolfii.haveiplayedwith.crafty.CraftyNameHistory;
 import me.wolfii.haveiplayedwith.crafty.CraftyPlayer;
 import me.wolfii.haveiplayedwith.crafty.CraftyPlayerApi;
 import me.wolfii.haveiplayedwith.mojang.MojangProfileApi;
@@ -165,21 +164,12 @@ public final class AllTheLogsImporter {
         if (username.isEmpty()) {
             return;
         }
-        Optional<CraftyPlayer> player = crafty.lookup(username.get());
+        Instant at = entry.timestamp().atZone(ZoneId.systemDefault()).toInstant();
+        Optional<CraftyPlayer> player = crafty.lookupHeld(username.get(), at);
         if (player.isEmpty() || !player.get().valid() || player.get().uuid() == null) {
             return;
         }
-        Instant at = entry.timestamp().atZone(ZoneId.systemDefault()).toInstant();
         CraftyPlayer resolved = player.get();
-        boolean held;
-        if (resolved.history().isEmpty()) {
-            held = resolved.currentUsername() != null && resolved.currentUsername().equalsIgnoreCase(username.get());
-        } else {
-            held = CraftyNameHistory.heldNameAt(resolved.history(), username.get(), at);
-        }
-        if (!held) {
-            return;
-        }
         mojang.rememberCurrent(resolved.uuid(), resolved.currentUsername());
         players.recordImportedSighting(
             resolved.uuid(),
