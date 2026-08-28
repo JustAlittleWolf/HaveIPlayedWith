@@ -17,10 +17,14 @@ public final class DurationFormat {
         }
         double hours = minutes / 60.0;
         if (hours <= 99.0) {
-            return ChatStyle.wording("haveiplayedwith.duration.hours", ChatStyle.duration(formatTenths(hours)));
+            String label = formatTenths(hours);
+            return ChatStyle.wording(
+                "1".equals(label) ? "haveiplayedwith.duration.hour" : "haveiplayedwith.duration.hours",
+                ChatStyle.duration(label)
+            );
         }
-        double days = hours / 24.0;
-        return ChatStyle.wording("haveiplayedwith.duration.days", ChatStyle.duration(formatTenths(days)));
+        String days = formatTenths(hours / 24.0);
+        return ChatStyle.wording("haveiplayedwith.duration.days", ChatStyle.duration(days));
     }
 
     public static Component hover(long minutes) {
@@ -47,6 +51,7 @@ public final class DurationFormat {
     }
 
     private static String formatTenths(double value) {
-        return String.format(Locale.ROOT, "%.1f", value);
+        String formatted = String.format(Locale.ROOT, "%.1f", value);
+        return formatted.endsWith(".0") ? formatted.substring(0, formatted.length() - 2) : formatted;
     }
 }

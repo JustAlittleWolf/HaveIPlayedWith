@@ -56,19 +56,31 @@ class ChatMessagesTest {
         Component played = QueryMessages.playedWith(snapshot());
         assertEquals(TextColor.GRAY.getValue(), played.getStyle().getColor().getValue());
 
+        assertEquals(3, args(played).length);
+
         Component duration = arg(played, 1);
         assertEquals(TextColor.GRAY.getValue(), duration.getStyle().getColor().getValue());
         assertEquals(false, duration.getStyle().isUnderlined());
         assertEquals(ChatStyle.DURATION, color(arg(duration, 0)));
-        assertInstanceOf(HoverEvent.ShowText.class, duration.getStyle().getHoverEvent());
+        HoverEvent.ShowText durationHover = assertInstanceOf(HoverEvent.ShowText.class, duration.getStyle().getHoverEvent());
+        assertEquals("haveiplayedwith.duration.hover", key(firstSibling(durationHover.value())));
+        Component lastPlayed = durationHover.value().getSiblings().get(2);
+        assertEquals("haveiplayedwith.query.last_played", key(lastPlayed));
+        assertEquals(ChatStyle.COUNT, color(arg(lastPlayed, 0)));
+        assertEquals("2026-08-01", literal(arg(lastPlayed, 0)));
 
         Component days = arg(played, 2);
         assertEquals(false, days.getStyle().isUnderlined());
         assertEquals(ChatStyle.COUNT, color(arg(days, 0)));
-
-        Component sessions = arg(played, 3);
-        assertEquals(false, sessions.getStyle().isUnderlined());
-        assertEquals(ChatStyle.COUNT, color(arg(sessions, 0)));
+        HoverEvent.ShowText daysHover = assertInstanceOf(HoverEvent.ShowText.class, days.getStyle().getHoverEvent());
+        Component sessions = firstSibling(daysHover.value());
+        assertEquals("haveiplayedwith.query.sessions.across", key(sessions));
+        assertEquals("haveiplayedwith.query.sessions", key(arg(sessions, 0)));
+        assertEquals(ChatStyle.COUNT, color(arg(arg(sessions, 0), 0)));
+        Component mostServer = daysHover.value().getSiblings().get(2);
+        assertEquals("haveiplayedwith.query.most_server", key(mostServer));
+        assertEquals("hypixel.net", literal(arg(mostServer, 0)));
+        assertEquals(ChatStyle.SERVER, color(arg(mostServer, 0)));
 
         Component seenOn = QueryMessages.seenOn(snapshot());
         Component serverList = arg(seenOn, 0);

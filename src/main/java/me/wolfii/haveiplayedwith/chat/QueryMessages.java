@@ -31,17 +31,14 @@ public final class QueryMessages {
 
     public static Component playedWith(PlayerSnapshot player) {
         MutableComponent duration = DurationFormat.compact(player.totalMinutes()).copy()
-            .withStyle(style -> style.withHoverEvent(new HoverEvent.ShowText(DurationFormat.hover(player.totalMinutes()))));
+            .withStyle(style -> style.withHoverEvent(new HoverEvent.ShowText(durationHover(player))));
         MutableComponent days = dayLabel(player.daysPlayed()).copy()
             .withStyle(style -> style.withHoverEvent(new HoverEvent.ShowText(daysHover(player))));
-        MutableComponent sessions = sessionLabel(player.sessionCount()).copy()
-            .withStyle(style -> style.withHoverEvent(new HoverEvent.ShowText(sessionsHover(player))));
         return ChatStyle.wording(
             "haveiplayedwith.query.played",
             ChatStyle.username(player.currentUsername(), player.uuid()),
             duration,
-            days,
-            sessions
+            days
         );
     }
 
@@ -89,15 +86,31 @@ public final class QueryMessages {
         );
     }
 
-    private static Component daysHover(PlayerSnapshot player) {
+    private static Component durationHover(PlayerSnapshot player) {
+        return hoverLines(DurationFormat.hover(player.totalMinutes()), lastPlayedHover(player));
+    }
+
+    private static Component lastPlayedHover(PlayerSnapshot player) {
         return player.lastPlayedBeforeToday()
             .map(day -> ChatStyle.wording("haveiplayedwith.query.last_played", ChatStyle.count(DATE.format(day))))
             .orElseGet(() -> ChatStyle.wording("haveiplayedwith.query.last_played.today"));
     }
 
+    private static Component daysHover(PlayerSnapshot player) {
+        return hoverLines(sessionsHover(player), mostServerHover(player));
+    }
+
     private static Component sessionsHover(PlayerSnapshot player) {
+        return ChatStyle.wording("haveiplayedwith.query.sessions.across", sessionLabel(player.sessionCount()));
+    }
+
+    private static Component mostServerHover(PlayerSnapshot player) {
         return player.mostPlayedServer()
             .map(server -> ChatStyle.wording("haveiplayedwith.query.most_server", ChatStyle.data(server.serverId(), ChatStyle.SERVER)))
             .orElseGet(() -> ChatStyle.wording("haveiplayedwith.query.most_server.none"));
+    }
+
+    private static Component hoverLines(Component first, Component second) {
+        return Component.empty().append(first).append(Component.literal("\n")).append(second);
     }
 }
