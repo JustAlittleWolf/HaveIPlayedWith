@@ -5,6 +5,7 @@ import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.suggestion.SuggestionProvider;
 import me.wolfii.db.PlayerDatabase;
 import me.wolfii.db.PlayerSnapshot;
+import me.wolfii.importing.ImportControls;
 import me.wolfii.net.MojangClient;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommands;
@@ -27,17 +28,23 @@ public final class HipwCommands {
 	private static final SuggestionProvider<FabricClientCommandSource> TAB_PLAYERS =
 		(context, builder) -> SharedSuggestionProvider.suggest(context.getSource().getOnlinePlayerNames(), builder);
 
+	private record PendingNote(UUID uuid, String username, String note) {
+	}
+
 	private final PlayerDatabase database;
 	private final MojangClient mojang;
+	private final ImportControls imports;
+	private final AtomicReference<PendingNote> pendingNote = new AtomicReference<>();
 	private final ExecutorService worker = Executors.newSingleThreadExecutor(runnable -> {
 		Thread thread = new Thread(runnable, "haveiplayedwith-commands");
 		thread.setDaemon(true);
 		return thread;
 	});
 
-	public HipwCommands(PlayerDatabase database, MojangClient mojang) {
+	public HipwCommands(PlayerDatabase database, MojangClient mojang, ImportControls imports) {
 		this.database = database;
 		this.mojang = mojang;
+		this.imports = imports;
 	}
 
 	public void register() {
@@ -55,11 +62,10 @@ public final class HipwCommands {
 				})));
 		dispatcher.register(ClientCommands.literal("playernote")
 			.then(ClientCommands.literal("confirm")
-				.then(ClientCommands.argument("rest", StringArgumentType.greedyString())
-					.executes(context -> {
-						handleConfirm(context.getSource(), StringArgumentType.getString(context, "rest"));
-						return 1;
-					})))
+				.executes(context -> {
+					confirmPending(context.getSource());
+					return 1;
+				}))
 			.then(ClientCommands.argument("name", StringArgumentType.word())
 				.suggests(TAB_PLAYERS)
 				.then(ClientCommands.argument("note", StringArgumentType.greedyString())
@@ -68,6 +74,22 @@ public final class HipwCommands {
 							StringArgumentType.getString(context, "note"));
 						return 1;
 					}))));
+		var importRoot = ClientCommands.literal("importhaveiplayedwith")
+			.then(ClientCommands.literal("silence").executes(context -> {
+				imports.toggleSilenceFromCommand();
+				return 1;
+			}))
+			.then(ClientCommands.literal("stop").executes(context -> {
+				imports.stopFromCommand();
+				return 1;
+			}));
+		if (imports.hasAllTheLogs()) {
+			importRoot = importRoot.then(ClientCommands.literal("allthelogs").executes(context -> {
+				imports.startAllTheLogs();
+				return 1;
+			}));
+		}
+		dispatcher.register(importRoot);
 	}
 
 	private void query(FabricClientCommandSource source, String name) {
@@ -117,39 +139,20 @@ public final class HipwCommands {
 				return;
 			}
 			UUID confirmed = uuid;
-			tell(source, QueryMessages.noteConfirm(name, confirmed, cleaned));
+			pendingNote.set(new PendingNote(confirmed, name, cleaned));
+			tell(source, QueryMessages.noteConfirm(name, confirmed));
 		});
 	}
 
-	private void handleConfirm(FabricClientCommandSource source, String rest) {
-		String cleaned = rest.replace('\n', ' ').replace('\r', ' ').strip();
-		int space = cleaned.indexOf(' ');
-		if (space > 0) {
-			String first = cleaned.substring(0, space);
-			String remainder = cleaned.substring(space + 1).strip();
-			if (isUuid(first) && !remainder.isEmpty()) {
-				confirmNote(source, first, remainder);
-				return;
-			}
+	private void confirmPending(FabricClientCommandSource source) {
+		PendingNote pending = pendingNote.getAndSet(null);
+		if (pending == null) {
+			tell(source, QueryMessages.nothingToConfirm());
+			return;
 		}
-		setNote(source, "confirm", cleaned);
-	}
-
-	private void confirmNote(FabricClientCommandSource source, String uuidText, String note) {
 		worker.execute(() -> {
-			UUID uuid;
-			try {
-				uuid = UUID.fromString(uuidText);
-			} catch (IllegalArgumentException e) {
-				tell(source, QueryMessages.unknownAccount(uuidText));
-				return;
-			}
-			String username = database.get(uuid).map(PlayerSnapshot::currentUsername).orElse(null);
-			if (username == null) {
-				username = mojang.lookupUuid(uuid).map(MojangClient.Profile::username).orElse(uuidText);
-			}
-			database.setNote(uuid, username, note.replace('\n', ' ').replace('\r', ' ').strip());
-			tell(source, QueryMessages.noteSaved(username));
+			database.setNote(pending.uuid(), pending.username(), pending.note());
+			tell(source, QueryMessages.noteSaved(pending.username()));
 		});
 	}
 
@@ -178,15 +181,6 @@ public final class HipwCommands {
 			Thread.currentThread().interrupt();
 		}
 		return found.get();
-	}
-
-	private static boolean isUuid(String text) {
-		try {
-			UUID.fromString(text);
-			return true;
-		} catch (IllegalArgumentException e) {
-			return false;
-		}
 	}
 
 	static void tell(FabricClientCommandSource source, Component message) {

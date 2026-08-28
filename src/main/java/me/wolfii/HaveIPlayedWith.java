@@ -3,6 +3,7 @@ package me.wolfii;
 import me.wolfii.command.HipwCommands;
 import me.wolfii.db.PlayerDatabase;
 import me.wolfii.importing.AllTheLogsCompat;
+import me.wolfii.importing.ImportControls;
 import me.wolfii.net.CraftyClient;
 import me.wolfii.net.MojangClient;
 import me.wolfii.observe.PlayerObserver;
@@ -30,10 +31,11 @@ public class HaveIPlayedWith implements ClientModInitializer {
 			CraftyClient crafty = new CraftyClient(database);
 			observer = new PlayerObserver(database, mojang);
 			observer.register();
-			new HipwCommands(database, mojang).register();
+			ImportControls imports = new ImportControls(database);
 			if (FabricLoader.getInstance().isModLoaded("allthelogs")) {
-				AllTheLogsCompat.install(database, crafty);
+				AllTheLogsCompat.install(database, crafty, imports);
 			}
+			new HipwCommands(database, mojang, imports).register();
 			ClientLifecycleEvents.CLIENT_STOPPING.register(client -> close());
 			LOGGER.info("Have I Played With initialized ({})", HipwPaths.databaseFile());
 		} catch (Exception e) {

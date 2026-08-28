@@ -98,12 +98,11 @@ public final class QueryMessages {
 			.append(Component.literal(".").withStyle(ChatFormatting.GRAY));
 	}
 
-	public static Component noteConfirm(String name, UUID uuid, String note) {
-		String command = "/playernote confirm " + uuid + " " + note;
+	public static Component noteConfirm(String name, UUID uuid) {
 		MutableComponent click = Component.literal("Click here").withStyle(style -> style
 			.withColor(rgb(CONFIRM))
 			.withUnderlined(true)
-			.withClickEvent(new ClickEvent.RunCommand(command))
+			.withClickEvent(new ClickEvent.RunCommand("/playernote confirm"))
 			.withHoverEvent(new HoverEvent.ShowText(Component.literal("Save this note for " + name).withStyle(ChatFormatting.GRAY)))
 		);
 		return Component.literal("You have not played with ").withStyle(ChatFormatting.GRAY)
@@ -111,6 +110,10 @@ public final class QueryMessages {
 			.append(Component.literal(" yet. ").withStyle(ChatFormatting.GRAY))
 			.append(click)
 			.append(Component.literal(" to save this note anyway.").withStyle(ChatFormatting.GRAY));
+	}
+
+	public static Component nothingToConfirm() {
+		return Component.literal("There is no pending player note to confirm.").withStyle(ChatFormatting.GRAY);
 	}
 
 	public static Component unknownAccount(String name) {
