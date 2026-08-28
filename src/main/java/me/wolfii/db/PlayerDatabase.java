@@ -70,6 +70,7 @@ public final class PlayerDatabase implements AutoCloseable {
 	private final MVMap<String, String> nameIndex;
 	private final MVMap<String, String> playDays;
 	private final MVMap<String, String> playSessions;
+	private final MVMap<String, String> playServers;
 	private final MVMap<String, String> mojangUuid;
 	private final MVMap<String, String> mojangName;
 	private final MVMap<String, String> crafty;
@@ -88,6 +89,7 @@ public final class PlayerDatabase implements AutoCloseable {
 			this.nameIndex = store.openMap("name_index");
 			this.playDays = store.openMap("play_days");
 			this.playSessions = store.openMap("play_sessions");
+			this.playServers = store.openMap("play_servers");
 			this.mojangUuid = store.openMap("mojang_uuid");
 			this.mojangName = store.openMap("mojang_name");
 			this.crafty = store.openMap("crafty");
@@ -145,14 +147,14 @@ public final class PlayerDatabase implements AutoCloseable {
 		});
 	}
 
-	public void recordLivePlay(UUID uuid, String username, LocalDate day, String sessionId) {
+	public void recordLivePlay(UUID uuid, String username, LocalDate day, String sessionId, String serverId) {
 		run(() -> {
 			Instant now = Instant.now();
 			ensurePlayerRow(uuid, username);
 			touchUsername(uuid, username, now);
 			setCurrentUsername(uuid, username);
 			addSession(uuid, sessionId);
-			addMinute(uuid, day);
+			addMinute(uuid, day, serverId);
 		});
 	}
 
@@ -323,6 +325,16 @@ public final class PlayerDatabase implements AutoCloseable {
 			names.add(new SeenName(seen.username(), Instant.ofEpochMilli(seen.lastSeen())));
 		}
 		names.sort(Comparator.comparing(SeenName::lastSeen).reversed());
+		List<ServerPlay> servers = new ArrayList<>();
+		Iterator<String> serverKeys = playServers.keyIterator(prefix);
+		while (serverKeys.hasNext()) {
+			String key = serverKeys.next();
+			if (!key.startsWith(prefix)) {
+				break;
+			}
+			servers.add(new ServerPlay(key.substring(prefix.length()), Long.parseLong(playServers.get(key))));
+		}
+		servers.sort(Comparator.comparingLong(ServerPlay::minutes).reversed().thenComparing(ServerPlay::serverId));
 		return Optional.of(new PlayerSnapshot(
 			uuid,
 			row.currentUsername(),
@@ -330,7 +342,8 @@ public final class PlayerDatabase implements AutoCloseable {
 			row.totalMinutes(),
 			row.sessionCount(),
 			countPrefix(playDays, prefix),
-			names
+			names,
+			servers
 		));
 	}
 
@@ -396,13 +409,24 @@ public final class PlayerDatabase implements AutoCloseable {
 		putPlayer(uuid, new PlayerRow(row.currentUsername(), row.note(), row.totalMinutes(), row.sessionCount() + 1));
 	}
 
-	private void addMinute(UUID uuid, LocalDate day) {
+	private void addMinute(UUID uuid, LocalDate day, String serverId) {
 		ensurePlayDay(uuid, day);
 		String key = uuid + "\t" + day;
 		long minutes = Long.parseLong(playDays.get(key)) + 1;
 		playDays.put(key, Long.toString(minutes));
+		addServerMinute(uuid, serverId);
 		PlayerRow row = playerRow(uuid);
 		putPlayer(uuid, new PlayerRow(row.currentUsername(), row.note(), row.totalMinutes() + 1, row.sessionCount()));
+	}
+
+	private void addServerMinute(UUID uuid, String serverId) {
+		if (serverId == null || serverId.isBlank()) {
+			return;
+		}
+		String key = uuid + "\t" + serverId;
+		String raw = playServers.get(key);
+		long minutes = raw == null ? 1 : Long.parseLong(raw) + 1;
+		playServers.put(key, Long.toString(minutes));
 	}
 
 	private void ensurePlayDay(UUID uuid, LocalDate day) {

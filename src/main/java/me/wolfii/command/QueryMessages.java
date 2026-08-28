@@ -16,6 +16,7 @@ import java.util.UUID;
 
 import me.wolfii.db.PlayerSnapshot;
 import me.wolfii.db.SeenName;
+import me.wolfii.db.ServerPlay;
 
 public final class QueryMessages {
 	public static final int NAME = 0x7CFF9A;
@@ -27,6 +28,7 @@ public final class QueryMessages {
 	public static final int UNKNOWN = 0xFF8FAB;
 	public static final int CONFIRM = 0xFFE066;
 	public static final int SESSIONS = 0xF0ABFC;
+	public static final int SERVER = 0x5EEAD4;
 
 	private static final DateTimeFormatter LAST_SEEN = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm", Locale.ROOT);
 
@@ -84,6 +86,30 @@ public final class QueryMessages {
 			)));
 		}
 		line.append(Component.literal(" in the past.").withStyle(ChatFormatting.GRAY));
+		return line;
+	}
+
+	public static Component seenOn(PlayerSnapshot player) {
+		List<ServerPlay> servers = player.servers();
+		MutableComponent line = Component.literal("You have seen them on ").withStyle(ChatFormatting.GRAY);
+		for (int i = 0; i < servers.size(); i++) {
+			ServerPlay server = servers.get(i);
+			if (i > 0) {
+				if (i == servers.size() - 1) {
+					line.append(Component.literal(" and ").withStyle(ChatFormatting.GRAY));
+				} else {
+					line.append(Component.literal(", ").withStyle(ChatFormatting.GRAY));
+				}
+			}
+			line.append(colored(server.serverId(), SERVER).withStyle(style -> style.withHoverEvent(
+				new HoverEvent.ShowText(Component.literal(DurationFormat.hover(server.minutes()))
+					.withStyle(style1 -> style1.withColor(rgb(DURATION))))
+			)));
+			line.append(Component.literal(" (").withStyle(ChatFormatting.GRAY));
+			line.append(colored(DurationFormat.compact(server.minutes()), DURATION));
+			line.append(Component.literal(")").withStyle(ChatFormatting.GRAY));
+		}
+		line.append(Component.literal(".").withStyle(ChatFormatting.GRAY));
 		return line;
 	}
 
