@@ -2,13 +2,12 @@ package me.wolfii.haveiplayedwith.mojang;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import me.wolfii.haveiplayedwith.ModLog;
 import me.wolfii.haveiplayedwith.http.JsonHttp;
 import me.wolfii.haveiplayedwith.http.RateLimiter;
 import me.wolfii.haveiplayedwith.store.MojangNameCache;
 import me.wolfii.haveiplayedwith.store.MojangProfileStore;
 import me.wolfii.haveiplayedwith.store.MojangUuidCache;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.net.URLEncoder;
 import java.net.http.HttpResponse;
@@ -27,7 +26,6 @@ import java.util.concurrent.TimeUnit;
  */
 public final class MojangProfileApi {
     public static final Duration STALE_AFTER = Duration.ofHours(24);
-    private static final Logger LOGGER = LoggerFactory.getLogger("haveiplayedwith");
     private static final String UUID_LOOKUP = "https://api.mojang.com/minecraft/profile/lookup/";
     private static final String NAME_LOOKUP = "https://api.mojang.com/users/profiles/minecraft/";
     private final MojangProfileStore store;
@@ -172,11 +170,11 @@ public final class MojangProfileApi {
                 return Optional.empty();
             }
             if (status == 429) {
-                LOGGER.debug("Mojang UUID lookup rate limited for {}", uuid);
+                ModLog.LOGGER.debug("Mojang UUID lookup rate limited for {}", uuid);
                 return Optional.empty();
             }
             if (status / 100 != 2) {
-                LOGGER.debug("Mojang UUID lookup {} returned {}", uuid, status);
+                ModLog.LOGGER.debug("Mojang UUID lookup {} returned {}", uuid, status);
                 return Optional.empty();
             }
             String name = readName(response.body());
@@ -186,7 +184,7 @@ public final class MojangProfileApi {
             Thread.currentThread().interrupt();
             return Optional.empty();
         } catch (Exception e) {
-            LOGGER.debug("Mojang UUID lookup failed for {}", uuid, e);
+            ModLog.LOGGER.debug("Mojang UUID lookup failed for {}", uuid, e);
             return Optional.empty();
         }
     }
@@ -201,7 +199,7 @@ public final class MojangProfileApi {
                 return new NameAnswer(Optional.empty(), true);
             }
             if (status / 100 != 2) {
-                LOGGER.debug("Mojang name lookup {} returned {}", username, status);
+                ModLog.LOGGER.debug("Mojang name lookup {} returned {}", username, status);
                 return NameAnswer.unknown();
             }
             return new NameAnswer(readProfile(response.body()), true);
@@ -209,7 +207,7 @@ public final class MojangProfileApi {
             Thread.currentThread().interrupt();
             return NameAnswer.unknown();
         } catch (Exception e) {
-            LOGGER.debug("Mojang name lookup failed for {}", username, e);
+            ModLog.LOGGER.debug("Mojang name lookup failed for {}", username, e);
             return NameAnswer.unknown();
         }
     }

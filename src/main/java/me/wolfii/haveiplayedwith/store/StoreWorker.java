@@ -1,7 +1,6 @@
 package me.wolfii.haveiplayedwith.store;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import me.wolfii.haveiplayedwith.ModLog;
 
 import java.sql.Connection;
 import java.sql.SQLException;
@@ -15,7 +14,6 @@ import java.util.concurrent.TimeUnit;
  * Serializes every store read and write onto one thread and commits after each task.
  */
 final class StoreWorker implements AutoCloseable {
-    private static final Logger LOGGER = LoggerFactory.getLogger("haveiplayedwith");
     private final ExecutorService worker = Executors.newSingleThreadExecutor(runnable -> {
         Thread thread = new Thread(runnable, "haveiplayedwith-db");
         thread.setDaemon(true);
@@ -71,7 +69,7 @@ final class StoreWorker implements AutoCloseable {
         try {
             run(connection::commit);
         } catch (RuntimeException e) {
-            LOGGER.warn("Failed to commit HaveIPlayedWith database", e);
+            ModLog.LOGGER.warn("Failed to commit HaveIPlayedWith database", e);
         }
         worker.shutdown();
         try {
@@ -83,7 +81,7 @@ final class StoreWorker implements AutoCloseable {
             Thread.currentThread().interrupt();
             closeQuietly();
         } catch (SQLException e) {
-            LOGGER.warn("Failed to close HaveIPlayedWith database", e);
+            ModLog.LOGGER.warn("Failed to close HaveIPlayedWith database", e);
         }
     }
 
@@ -91,7 +89,7 @@ final class StoreWorker implements AutoCloseable {
         try {
             connection.close();
         } catch (SQLException e) {
-            LOGGER.warn("Failed to close HaveIPlayedWith database", e);
+            ModLog.LOGGER.warn("Failed to close HaveIPlayedWith database", e);
         }
     }
 }

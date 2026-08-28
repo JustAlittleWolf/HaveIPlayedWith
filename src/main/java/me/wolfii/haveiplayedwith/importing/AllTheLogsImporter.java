@@ -4,14 +4,13 @@ import me.wolfii.allthelogs.api.AllTheLogs;
 import me.wolfii.allthelogs.api.ChatEntry;
 import me.wolfii.allthelogs.api.ChatQuery;
 import me.wolfii.allthelogs.api.LogDatabase;
+import me.wolfii.haveiplayedwith.ModLog;
 import me.wolfii.haveiplayedwith.chat.ImportMessages;
 import me.wolfii.haveiplayedwith.crafty.CraftyPlayer;
 import me.wolfii.haveiplayedwith.crafty.CraftyPlayerApi;
 import me.wolfii.haveiplayedwith.mojang.MojangProfileApi;
 import me.wolfii.haveiplayedwith.store.ImportProgress;
 import me.wolfii.haveiplayedwith.store.PlayerStore;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.time.Instant;
 import java.time.LocalDateTime;
@@ -22,7 +21,6 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public final class AllTheLogsImporter {
-    private static final Logger LOGGER = LoggerFactory.getLogger("haveiplayedwith");
     private static final int PAGE_SIZE = 400;
     private static final long SAVE_EVERY = 250;
     /** Most log lines hold no username, so throttle by time rather than by lines walked. */
@@ -154,7 +152,7 @@ public final class AllTheLogsImporter {
             ));
             controls.chat(ImportMessages.finished(processed));
         } catch (Exception e) {
-            LOGGER.warn("AllTheLogs import failed", e);
+            ModLog.LOGGER.warn("AllTheLogs import failed", e);
             controls.chat(ImportMessages.failed());
         }
     }

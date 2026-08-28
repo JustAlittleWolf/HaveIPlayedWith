@@ -4,10 +4,9 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import me.wolfii.haveiplayedwith.ModLog;
 import me.wolfii.haveiplayedwith.http.JsonHttp;
 import me.wolfii.haveiplayedwith.http.RateLimiter;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.net.URLEncoder;
 import java.net.http.HttpResponse;
@@ -27,7 +26,6 @@ import java.util.concurrent.TimeUnit;
  * one whose name-history interval covers the chat timestamp.
  */
 public final class CraftyPlayerApi {
-    private static final Logger LOGGER = LoggerFactory.getLogger("haveiplayedwith");
     private static final String USERNAMES = "https://api.crafty.gg/api/v2/usernames/";
     private static final String PLAYER = "https://api.crafty.gg/api/v2/players/";
     private final RateLimiter limiter = new RateLimiter(140, 1, TimeUnit.MINUTES);
@@ -138,11 +136,11 @@ public final class CraftyPlayerApi {
                 return Optional.of(List.of());
             }
             if (status == 429) {
-                LOGGER.debug("Crafty username lookup rate limited for {}", username);
+                ModLog.LOGGER.debug("Crafty username lookup rate limited for {}", username);
                 return Optional.empty();
             }
             if (status / 100 != 2) {
-                LOGGER.debug("Crafty username lookup {} returned {}", username, status);
+                ModLog.LOGGER.debug("Crafty username lookup {} returned {}", username, status);
                 return Optional.empty();
             }
             List<CraftyPlayer> players = new ArrayList<>();
@@ -160,7 +158,7 @@ public final class CraftyPlayerApi {
             Thread.currentThread().interrupt();
             return Optional.empty();
         } catch (Exception e) {
-            LOGGER.debug("Crafty username lookup failed for {}", username, e);
+            ModLog.LOGGER.debug("Crafty username lookup failed for {}", username, e);
             return Optional.empty();
         }
     }
@@ -178,11 +176,11 @@ public final class CraftyPlayerApi {
                 return Optional.of(invalid());
             }
             if (status == 429) {
-                LOGGER.debug("Crafty player lookup rate limited for {}", uuid);
+                ModLog.LOGGER.debug("Crafty player lookup rate limited for {}", uuid);
                 return Optional.empty();
             }
             if (status / 100 != 2) {
-                LOGGER.debug("Crafty player lookup {} returned {}", uuid, status);
+                ModLog.LOGGER.debug("Crafty player lookup {} returned {}", uuid, status);
                 return Optional.empty();
             }
             Optional<CraftyPlayer> parsed = parsePlayer(response.body());
@@ -195,7 +193,7 @@ public final class CraftyPlayerApi {
             Thread.currentThread().interrupt();
             return Optional.empty();
         } catch (Exception e) {
-            LOGGER.debug("Crafty player lookup failed for {}", uuid, e);
+            ModLog.LOGGER.debug("Crafty player lookup failed for {}", uuid, e);
             return Optional.empty();
         }
     }
