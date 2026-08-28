@@ -25,6 +25,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public final class AllTheLogsImporter {
 	private static final Logger LOGGER = LoggerFactory.getLogger("haveiplayedwith");
 	private static final int PAGE_SIZE = 400;
+	private static final long SAVE_EVERY = 250;
+	/** Most log lines hold no username, so throttle by time rather than by lines walked. */
+	private static final long REPORT_INTERVAL_NANOS = 15_000_000_000L;
 	private final PlayerDatabase database;
 	private final CraftyClient crafty;
 	private final ExecutorService worker = Executors.newSingleThreadExecutor(runnable -> {
@@ -32,7 +35,7 @@ public final class AllTheLogsImporter {
 		thread.setDaemon(true);
 		return thread;
 	});
-	private final AtomicBoolean running = new AtomicBoolean(false);
+	private final AtomicBoolean scheduled = new AtomicBoolean(false);
 
 	public AllTheLogsImporter(PlayerDatabase database, CraftyClient crafty) {
 		this.database = database;
@@ -40,17 +43,24 @@ public final class AllTheLogsImporter {
 	}
 
 	public void resumeIfNeeded() {
+		if (!scheduled.compareAndSet(false, true)) {
+			return;
+		}
 		worker.execute(() -> {
-			Optional<ImportProgress> progress = database.importProgress(ImportProgress.SOURCE_ALLTHELOGS);
-			if (progress.isPresent() && ImportProgress.STATUS_RUNNING.equals(progress.get().status())) {
-				chat(QueryMessages.importStatus("Resuming AllTheLogs import..."));
-				runImport(progress.get());
+			try {
+				Optional<ImportProgress> progress = database.importProgress(ImportProgress.SOURCE_ALLTHELOGS);
+				if (progress.isPresent() && ImportProgress.STATUS_RUNNING.equals(progress.get().status())) {
+					chat(QueryMessages.importStatus("Resuming AllTheLogs import..."));
+					runImport(progress.get());
+				}
+			} finally {
+				scheduled.set(false);
 			}
 		});
 	}
 
 	public void startFromCommand() {
-		if (!running.compareAndSet(false, true)) {
+		if (!scheduled.compareAndSet(false, true)) {
 			chat(QueryMessages.importStatus("AllTheLogs import is already running."));
 			return;
 		}
@@ -63,13 +73,12 @@ public final class AllTheLogsImporter {
 				chat(QueryMessages.importStatus("Starting AllTheLogs import in the background."));
 				runImport(start);
 			} finally {
-				running.set(false);
+				scheduled.set(false);
 			}
 		});
 	}
 
 	private void runImport(ImportProgress start) {
-		running.set(true);
 		try {
 			waitUntilOpen();
 			LogDatabase logs = AllTheLogs.database();
@@ -84,7 +93,8 @@ public final class AllTheLogsImporter {
 			long processed = start.processed();
 			LocalDateTime lastTimestamp = start.lastTimestamp();
 			long skip = start.skip();
-			long lastReport = processed;
+			long lastSave = processed;
+			long lastReportAt = System.nanoTime();
 			database.saveImportProgress(new ImportProgress(
 				ImportProgress.SOURCE_ALLTHELOGS, processed, total, lastTimestamp, skip, ImportProgress.STATUS_RUNNING
 			));
@@ -108,12 +118,16 @@ public final class AllTheLogsImporter {
 						lastTimestamp = entry.timestamp();
 						skip = 1;
 					}
-					if (processed - lastReport >= 250) {
-						lastReport = processed;
-						report(processed, total);
+					if (processed - lastSave >= SAVE_EVERY) {
+						lastSave = processed;
 						database.saveImportProgress(new ImportProgress(
 							ImportProgress.SOURCE_ALLTHELOGS, processed, total, lastTimestamp, skip, ImportProgress.STATUS_RUNNING
 						));
+						long now = System.nanoTime();
+						if (now - lastReportAt >= REPORT_INTERVAL_NANOS) {
+							lastReportAt = now;
+							report(processed, total);
+						}
 					}
 				}
 			}
@@ -124,8 +138,6 @@ public final class AllTheLogsImporter {
 		} catch (Exception e) {
 			LOGGER.warn("AllTheLogs import failed", e);
 			chat(QueryMessages.importStatus("AllTheLogs import failed. It will resume next launch."));
-		} finally {
-			running.set(false);
 		}
 	}
 

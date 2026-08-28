@@ -17,6 +17,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -25,8 +26,11 @@ import java.util.concurrent.TimeUnit;
 public final class CraftyClient {
 	private static final Logger LOGGER = LoggerFactory.getLogger("haveiplayedwith");
 	private static final String SEARCH = "https://api.crafty.gg/api/v2/players/?search=";
+	/** An import walks millions of lines, so keep the hottest names out of the database entirely. */
+	private static final int MAX_MEMORY_ENTRIES = 10_000;
 	private final PlayerDatabase database;
 	private final RateLimiter limiter = new RateLimiter(140, 1, TimeUnit.MINUTES);
+	private final ConcurrentHashMap<String, Player> memory = new ConcurrentHashMap<>();
 
 	public record Player(UUID uuid, String currentUsername, List<CraftyNameHistory.Entry> history, boolean valid) {
 	}
@@ -37,13 +41,27 @@ public final class CraftyClient {
 
 	public Optional<Player> lookup(String username) {
 		String key = CraftyNameHistory.cacheKey(username);
-		Optional<PlayerDatabase.CraftyCache> cached = database.craftyCache(key);
+		Player remembered = memory.get(key);
+		if (remembered != null) {
+			return Optional.of(remembered);
+		}
+		Optional<Player> cached = database.craftyCache(key).flatMap(CraftyClient::fromCache);
 		if (cached.isPresent()) {
-			return fromCache(cached.get());
+			remember(key, cached.get());
+			return cached;
 		}
 		Optional<Player> fetched = fetch(username);
-		store(key, fetched);
+		fetched.ifPresent(player -> {
+			store(key, player);
+			remember(key, player);
+		});
 		return fetched;
+	}
+
+	private void remember(String key, Player player) {
+		if (memory.size() < MAX_MEMORY_ENTRIES) {
+			memory.put(key, player);
+		}
 	}
 
 	private Optional<Player> fetch(String username) {
@@ -73,11 +91,7 @@ public final class CraftyClient {
 		}
 	}
 
-	private void store(String key, Optional<Player> fetched) {
-		if (fetched.isEmpty()) {
-			return;
-		}
-		Player player = fetched.get();
+	private void store(String key, Player player) {
 		database.putCraftyCache(key, new PlayerDatabase.CraftyCache(
 			player.uuid() == null ? null : player.uuid().toString(),
 			player.currentUsername(),
