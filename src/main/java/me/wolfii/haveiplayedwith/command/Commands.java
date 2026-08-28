@@ -1,0 +1,88 @@
+package me.wolfii.haveiplayedwith.command;
+
+import com.mojang.brigadier.CommandDispatcher;
+import com.mojang.brigadier.arguments.StringArgumentType;
+import me.wolfii.clientdatacommandselector.ClientEntityArgument;
+import me.wolfii.haveiplayedwith.importing.ImportControls;
+import me.wolfii.haveiplayedwith.net.MojangClient;
+import me.wolfii.haveiplayedwith.store.PlayerDatabase;
+import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
+import net.fabricmc.fabric.api.client.command.v2.ClientCommands;
+import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
+
+import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
+public final class Commands {
+    private final ImportControls imports;
+    private final PlayerLookup lookup;
+    private final PlayerNotes notes;
+
+    public Commands(PlayerDatabase database, MojangClient mojang, ImportControls imports) {
+        this.imports = imports;
+        ExecutorService worker = Executors.newSingleThreadExecutor(runnable -> {
+            Thread thread = new Thread(runnable, "haveiplayedwith-commands");
+            thread.setDaemon(true);
+            return thread;
+        });
+        this.lookup = new PlayerLookup(database, mojang, worker);
+        this.notes = new PlayerNotes(database, mojang, worker);
+    }
+
+    public void register() {
+        ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> register(dispatcher));
+    }
+
+    private void register(CommandDispatcher<FabricClientCommandSource> dispatcher) {
+        dispatcher.register(ClientCommands.literal("haveiplayedwith")
+            .then(ClientCommands.argument("player", ClientEntityArgument.players())
+                .executes(context -> {
+                    List<PlayerArguments.ResolvedPlayer> targets = PlayerArguments.resolvePlayers(context, "player");
+                    if (targets.isEmpty()) {
+                        CommandFeedback.tell(context.getSource(), QueryMessages.noMatchingPlayers());
+                        return 0;
+                    }
+                    for (PlayerArguments.ResolvedPlayer target : targets) {
+                        lookup.query(context.getSource(), target);
+                    }
+                    return targets.size();
+                })));
+        dispatcher.register(ClientCommands.literal("playernote")
+            .then(ClientCommands.literal("confirm")
+                .executes(context -> {
+                    notes.confirmPending(context.getSource());
+                    return 1;
+                }))
+            .then(ClientCommands.argument("player", ClientEntityArgument.players())
+                .then(ClientCommands.argument("note", StringArgumentType.greedyString())
+                    .executes(context -> {
+                        List<PlayerArguments.ResolvedPlayer> targets = PlayerArguments.resolvePlayers(context, "player");
+                        if (targets.isEmpty()) {
+                            CommandFeedback.tell(context.getSource(), QueryMessages.noMatchingPlayers());
+                            return 0;
+                        }
+                        String note = StringArgumentType.getString(context, "note");
+                        for (PlayerArguments.ResolvedPlayer target : targets) {
+                            notes.setNote(context.getSource(), target, note);
+                        }
+                        return targets.size();
+                    }))));
+        var importRoot = ClientCommands.literal("importhaveiplayedwith")
+            .then(ClientCommands.literal("silence").executes(context -> {
+                imports.toggleSilenceFromCommand();
+                return 1;
+            }))
+            .then(ClientCommands.literal("stop").executes(context -> {
+                imports.stopFromCommand();
+                return 1;
+            }));
+        if (imports.hasAllTheLogs()) {
+            importRoot = importRoot.then(ClientCommands.literal("allthelogs").executes(context -> {
+                imports.startAllTheLogs();
+                return 1;
+            }));
+        }
+        dispatcher.register(importRoot);
+    }
+}
