@@ -11,10 +11,6 @@ import org.h2.mvstore.type.StringDataType;
  * values are binary rows or packed longs, not JSON.
  */
 final class StoreMaps {
-    static final int SCHEMA = 2;
-    static final String META = "hipw_meta";
-    static final String SCHEMA_KEY = "schema";
-
     static final String PLAYERS = "players";
     static final String HISTORY = "username_history";
     static final String NAME_INDEX = "name_index";
@@ -39,11 +35,5 @@ final class StoreMaps {
         return store.openMap(name, new MVMap.Builder<String, Long>()
             .keyType(StringDataType.INSTANCE)
             .valueType(LongDataType.INSTANCE));
-    }
-
-    static MVMap<String, String> strings(MVStore store, String name) {
-        return store.openMap(name, new MVMap.Builder<String, String>()
-            .keyType(StringDataType.INSTANCE)
-            .valueType(StringDataType.INSTANCE));
     }
 }

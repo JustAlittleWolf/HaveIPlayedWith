@@ -35,7 +35,6 @@ final class StoreSession implements AutoCloseable {
         this.mojangName = StoreMaps.bytes(store, StoreMaps.MOJANG_NAME);
         this.crafty = StoreMaps.bytes(store, StoreMaps.CRAFTY);
         this.imports = StoreMaps.bytes(store, StoreMaps.IMPORTS);
-        StoreMaps.strings(store, StoreMaps.META).putIfAbsent(StoreMaps.SCHEMA_KEY, Integer.toString(StoreMaps.SCHEMA));
     }
 
     static StoreSession open(Path file) {
@@ -46,10 +45,7 @@ final class StoreSession implements AutoCloseable {
                 .compress()
                 .autoCommitDisabled()
                 .open();
-            StoreMigrator.migrateIfNeeded(store);
-            StoreSession session = new StoreSession(new StoreWorker(store), store);
-            store.commit();
-            return session;
+            return new StoreSession(new StoreWorker(store), store);
         } catch (Exception e) {
             throw new IllegalStateException("Failed to open HaveIPlayedWith database at " + file, e);
         }

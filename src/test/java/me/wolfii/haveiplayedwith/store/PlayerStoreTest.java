@@ -1,7 +1,5 @@
 package me.wolfii.haveiplayedwith.store;
 
-import com.google.gson.Gson;
-import org.h2.mvstore.MVStore;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -196,44 +194,6 @@ class PlayerStoreTest {
     }
 
     @Test
-    void binaryPlayerRowIsSmallerThanJson() {
-        StoreRows.PlayerRow row = new StoreRows.PlayerRow("Steve", "", 0, 3, 1);
-        String json = new com.google.gson.Gson().toJson(row);
-        byte[] binary = StoreCodec.player(row);
-        assertTrue(binary.length < json.length(), () -> "binary " + binary.length + " vs json " + json.length());
-    }
-
-    @Test
-    void migratesJsonMapsFromSchema1() {
-        Path file = temp.resolve("players.mv");
-        UUID uuid = UUID.fromString("61699b2e-d327-4a01-9f1e-0ea8c3f06bc6");
-        writeSchema1Store(file, uuid);
-
-        try (PlayerStore players = new PlayerStore(file)) {
-            PlayerSnapshot snapshot = players.get(uuid).orElseThrow();
-            assertEquals("Alex", snapshot.currentUsername());
-            assertEquals(3, snapshot.totalMinutes());
-            assertEquals(2, snapshot.daysPlayed());
-            assertEquals(2, snapshot.sessionCount());
-            assertEquals("builds nice farms", snapshot.note().orElseThrow());
-            assertEquals(1, players.findByName("steve").size());
-            assertEquals(1, players.findByName("alex").size());
-            assertEquals(List.of(
-                new ServerPlay("hypixel.net", 2),
-                new ServerPlay("world/Survival", 1)
-            ), snapshot.servers());
-            ImportProgress progress = players.importProgress().get(ImportProgress.SOURCE_ALLTHELOGS).orElseThrow();
-            assertEquals(12, progress.processed());
-            assertTrue(progress.silenced());
-        }
-
-        try (PlayerStore players = new PlayerStore(file)) {
-            assertEquals("Alex", players.get(uuid).orElseThrow().currentUsername());
-            assertEquals(1, players.findByName("steve").size());
-        }
-    }
-
-    @Test
     void livePlayReportsPreviousSeenNameOnRename() {
         try (PlayerStore players = new PlayerStore(temp.resolve("players.mv"))) {
             UUID uuid = UUID.randomUUID();
@@ -274,33 +234,6 @@ class PlayerStoreTest {
             assertEquals(12, progress.processed());
             assertTrue(progress.silenced());
             assertEquals(ImportProgress.STATUS_RUNNING, progress.status());
-        }
-    }
-
-    /**
-     * Writes a schema-1 file the way HaveIPlayedWith 1.0 did: default ObjectDataType maps
-     * whose values are Gson JSON (and decimal strings for counters).
-     */
-    private static void writeSchema1Store(Path file, UUID uuid) {
-        Gson gson = new Gson();
-        String id = uuid.toString();
-        try (MVStore store = new MVStore.Builder().fileName(file.toAbsolutePath().toString()).compress().open()) {
-            store.openMap("players").put(id, gson.toJson(new StoreRows.PlayerRow("Alex", "builds nice farms", 1L, 3, 2)));
-            store.openMap("username_history").put(id + "\tsteve", gson.toJson(new StoreRows.HistoryRow("Steve", Instant.parse("2026-08-01T00:00:00Z").toEpochMilli())));
-            store.openMap("username_history").put(id + "\talex", gson.toJson(new StoreRows.HistoryRow("Alex", Instant.parse("2026-08-02T00:00:00Z").toEpochMilli())));
-            store.openMap("name_index").put("steve", gson.toJson(new String[]{id}));
-            store.openMap("name_index").put("alex", gson.toJson(new String[]{id}));
-            store.openMap("play_days").put(id + "\t2026-08-01", "2");
-            store.openMap("play_days").put(id + "\t2026-08-02", "1");
-            store.openMap("play_sessions").put(id + "\tlive:one", "1");
-            store.openMap("play_sessions").put(id + "\tlive:two", "1");
-            store.openMap("play_servers").put(id + "\thypixel.net", "2");
-            store.openMap("play_servers").put(id + "\tworld/Survival", "1");
-            store.openMap("import_progress").put(
-                ImportProgress.SOURCE_ALLTHELOGS,
-                gson.toJson(new StoreRows.ImportRow(12, 100, "", 0, ImportProgress.STATUS_RUNNING, true))
-            );
-            store.commit();
         }
     }
 }

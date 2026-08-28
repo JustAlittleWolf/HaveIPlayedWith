@@ -8,8 +8,7 @@ import java.util.Locale;
 import java.util.UUID;
 
 /**
- * MVStore key formats. Changing these would break existing {@code players.mv} files
- * unless {@link StoreMigrator} knows how to convert them.
+ * MVStore key formats.
  */
 final class StoreKeys {
     private StoreKeys() {
