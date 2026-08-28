@@ -2,9 +2,9 @@ package me.wolfii.haveiplayedwith.observe;
 
 import com.mojang.authlib.GameProfile;
 import me.wolfii.haveiplayedwith.MinecraftUsernames;
-import me.wolfii.haveiplayedwith.command.QueryMessages;
-import me.wolfii.haveiplayedwith.net.MojangClient;
-import me.wolfii.haveiplayedwith.store.PlayerDatabase;
+import me.wolfii.haveiplayedwith.chat.RenameMessages;
+import me.wolfii.haveiplayedwith.mojang.MojangProfileApi;
+import me.wolfii.haveiplayedwith.store.PlayerStore;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.minecraft.client.Minecraft;
@@ -38,8 +38,8 @@ public final class PlayerObserver {
     /** Sightings waiting to be classified as "needs a lookup" or "already known". */
     private static final int MAX_SIGHTING_BUFFER = 2048;
     private static final long CREDIT_MEMORY_MINUTES = 60;
-    private final PlayerDatabase database;
-    private final MojangClient mojang;
+    private final PlayerStore players;
+    private final MojangProfileApi mojang;
     private final ExecutorService dispatcher = Executors.newSingleThreadExecutor(named("haveiplayedwith-sightings"));
     private final ExecutorService lookupWorker = Executors.newSingleThreadExecutor(named("haveiplayedwith-mojang"));
     private final BlockingQueue<Sighting> sightings = new ArrayBlockingQueue<>(MAX_SIGHTING_BUFFER);
@@ -51,8 +51,8 @@ public final class PlayerObserver {
     /** One id for this client run, assigned at boot and kept across join/disconnect. */
     private final String sessionId = UUID.randomUUID().toString();
     private volatile String locationId;
-    public PlayerObserver(PlayerDatabase database, MojangClient mojang) {
-        this.database = database;
+    public PlayerObserver(PlayerStore players, MojangProfileApi mojang) {
+        this.players = players;
         this.mojang = mojang;
         dispatcher.execute(this::dispatchLoop);
         lookupWorker.execute(this::lookupLoop);
@@ -186,12 +186,12 @@ public final class PlayerObserver {
     private void credit(Sighting sighting) {
         Long last = creditedMinute.put(sighting.uuid(), sighting.epochMinute());
         if (last != null && last == sighting.epochMinute()) {
-            announceRename(sighting.uuid(), database.applyMojangUsername(sighting.uuid(), sighting.username(), Instant.now()), sighting.username());
+            announceRename(sighting.uuid(), players.applyMojangUsername(sighting.uuid(), sighting.username(), Instant.now()), sighting.username());
             return;
         }
         announceRename(
             sighting.uuid(),
-            database.recordLivePlay(sighting.uuid(), sighting.username(), sighting.day(), "live:" + sighting.sessionId(), sighting.serverId()),
+            players.recordLivePlay(sighting.uuid(), sighting.username(), sighting.day(), "live:" + sighting.sessionId(), sighting.serverId()),
             sighting.username()
         );
     }
@@ -207,7 +207,7 @@ public final class PlayerObserver {
             if (self == null || uuid.equals(self.getUUID())) {
                 return;
             }
-            Component message = QueryMessages.playerRenamed(previous, currentName, uuid);
+            Component message = RenameMessages.playerRenamed(previous, currentName, uuid);
             self.sendSystemMessage(message);
         });
     }

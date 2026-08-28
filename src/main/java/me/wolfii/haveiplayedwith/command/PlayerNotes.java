@@ -1,8 +1,11 @@
 package me.wolfii.haveiplayedwith.command;
 
-import me.wolfii.haveiplayedwith.net.MojangClient;
-import me.wolfii.haveiplayedwith.store.PlayerDatabase;
+import me.wolfii.haveiplayedwith.chat.NoteMessages;
+import me.wolfii.haveiplayedwith.chat.QueryMessages;
+import me.wolfii.haveiplayedwith.mojang.MojangProfile;
+import me.wolfii.haveiplayedwith.mojang.MojangProfileApi;
 import me.wolfii.haveiplayedwith.store.PlayerSnapshot;
+import me.wolfii.haveiplayedwith.store.PlayerStore;
 import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
 
 import java.util.List;
@@ -11,13 +14,13 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicReference;
 
 final class PlayerNotes {
-    private final PlayerDatabase database;
-    private final MojangClient mojang;
+    private final PlayerStore players;
+    private final MojangProfileApi mojang;
     private final ExecutorService worker;
     private final AtomicReference<PendingNote> pendingNote = new AtomicReference<>();
 
-    PlayerNotes(PlayerDatabase database, MojangClient mojang, ExecutorService worker) {
-        this.database = database;
+    PlayerNotes(PlayerStore players, MojangProfileApi mojang, ExecutorService worker) {
+        this.players = players;
         this.mojang = mojang;
         this.worker = worker;
     }
@@ -26,12 +29,12 @@ final class PlayerNotes {
         String cleaned = note.replace('\n', ' ').replace('\r', ' ').strip();
         worker.execute(() -> {
             List<PlayerSnapshot> matches = target.uuid() != null
-                ? database.get(target.uuid()).map(List::of).orElseGet(List::of)
-                : database.findByName(target.name());
+                ? players.get(target.uuid()).map(List::of).orElseGet(List::of)
+                : players.findByName(target.name());
             if (!matches.isEmpty()) {
                 for (PlayerSnapshot match : matches) {
-                    database.setNote(match.uuid(), match.currentUsername(), cleaned);
-                    CommandFeedback.tell(source, QueryMessages.noteSaved(match.currentUsername()));
+                    players.setNote(match.uuid(), match.currentUsername(), cleaned);
+                    CommandFeedback.tell(source, NoteMessages.noteSaved(match.currentUsername()));
                 }
                 return;
             }
@@ -40,7 +43,7 @@ final class PlayerNotes {
             if (uuid == null && name != null) {
                 uuid = PlayerArguments.uuidFromTab(name);
                 if (uuid == null) {
-                    uuid = mojang.lookupName(name).map(MojangClient.Profile::uuid).orElse(null);
+                    uuid = mojang.lookupName(name).map(MojangProfile::uuid).orElse(null);
                 }
             }
             if (uuid == null) {
@@ -49,19 +52,19 @@ final class PlayerNotes {
             }
             String username = name != null ? name : uuid.toString();
             pendingNote.set(new PendingNote(uuid, username, cleaned));
-            CommandFeedback.tell(source, QueryMessages.noteConfirm(username, uuid));
+            CommandFeedback.tell(source, NoteMessages.noteConfirm(username, uuid));
         });
     }
 
     void confirmPending(FabricClientCommandSource source) {
         PendingNote pending = pendingNote.getAndSet(null);
         if (pending == null) {
-            CommandFeedback.tell(source, QueryMessages.nothingToConfirm());
+            CommandFeedback.tell(source, NoteMessages.nothingToConfirm());
             return;
         }
         worker.execute(() -> {
-            database.setNote(pending.uuid(), pending.username(), pending.note());
-            CommandFeedback.tell(source, QueryMessages.noteSaved(pending.username()));
+            players.setNote(pending.uuid(), pending.username(), pending.note());
+            CommandFeedback.tell(source, NoteMessages.noteSaved(pending.username()));
         });
     }
 

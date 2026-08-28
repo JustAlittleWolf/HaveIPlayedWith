@@ -1,20 +1,22 @@
 package me.wolfii.haveiplayedwith.command;
 
-import me.wolfii.haveiplayedwith.net.MojangClient;
-import me.wolfii.haveiplayedwith.store.PlayerDatabase;
+import me.wolfii.haveiplayedwith.chat.QueryMessages;
+import me.wolfii.haveiplayedwith.chat.NoteMessages;
+import me.wolfii.haveiplayedwith.mojang.MojangProfileApi;
 import me.wolfii.haveiplayedwith.store.PlayerSnapshot;
+import me.wolfii.haveiplayedwith.store.PlayerStore;
 import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
 
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 
 final class PlayerLookup {
-    private final PlayerDatabase database;
-    private final MojangClient mojang;
+    private final PlayerStore players;
+    private final MojangProfileApi mojang;
     private final ExecutorService worker;
 
-    PlayerLookup(PlayerDatabase database, MojangClient mojang, ExecutorService worker) {
-        this.database = database;
+    PlayerLookup(PlayerStore players, MojangProfileApi mojang, ExecutorService worker) {
+        this.players = players;
         this.mojang = mojang;
         this.worker = worker;
     }
@@ -22,7 +24,7 @@ final class PlayerLookup {
     void query(FabricClientCommandSource source, PlayerArguments.ResolvedPlayer target) {
         worker.execute(() -> {
             if (target.uuid() != null) {
-                PlayerSnapshot match = database.get(target.uuid()).orElse(null);
+                PlayerSnapshot match = players.get(target.uuid()).orElse(null);
                 if (match == null) {
                     String name = target.name() != null ? target.name() : target.uuid().toString();
                     CommandFeedback.tell(source, QueryMessages.notPlayedWith(name, target.uuid()));
@@ -31,7 +33,7 @@ final class PlayerLookup {
                 show(source, match);
                 return;
             }
-            List<PlayerSnapshot> matches = database.findByName(target.name());
+            List<PlayerSnapshot> matches = players.findByName(target.name());
             if (matches.isEmpty()) {
                 CommandFeedback.tell(source, QueryMessages.notPlayedWith(target.name()));
                 return;
@@ -45,10 +47,10 @@ final class PlayerLookup {
     private void show(FabricClientCommandSource source, PlayerSnapshot match) {
         mojang.lookupUuid(match.uuid()).ifPresent(profile -> {
             if (!profile.username().equals(match.currentUsername())) {
-                database.applyMojangUsername(match.uuid(), profile.username(), java.time.Instant.now());
+                players.applyMojangUsername(match.uuid(), profile.username(), java.time.Instant.now());
             }
         });
-        PlayerSnapshot latest = database.get(match.uuid()).orElse(match);
+        PlayerSnapshot latest = players.get(match.uuid()).orElse(match);
         if (latest.hasPlayed()) {
             CommandFeedback.tell(source, QueryMessages.playedWith(latest));
             if (!latest.servers().isEmpty()) {
@@ -60,6 +62,6 @@ final class PlayerLookup {
         } else {
             CommandFeedback.tell(source, QueryMessages.notPlayedWith(latest.currentUsername(), latest.uuid()));
         }
-        latest.note().ifPresent(note -> CommandFeedback.tell(source, QueryMessages.note(latest)));
+        latest.note().ifPresent(note -> CommandFeedback.tell(source, NoteMessages.note(latest)));
     }
 }

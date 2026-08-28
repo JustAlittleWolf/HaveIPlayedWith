@@ -40,14 +40,14 @@ final class StoreRows {
         }
     }
 
-    record InstantRow(String username, long fetchedAt) {
-        InstantRow {
+    record MojangUuidRow(String username, long fetchedAt) {
+        MojangUuidRow {
             username = emptyIfNull(username);
         }
     }
 
-    record NameCacheRow(String uuid, String username, long fetchedAt) {
-        NameCacheRow {
+    record MojangNameRow(String uuid, String username, long fetchedAt) {
+        MojangNameRow {
             uuid = emptyIfNull(uuid);
             username = emptyIfNull(username);
         }
