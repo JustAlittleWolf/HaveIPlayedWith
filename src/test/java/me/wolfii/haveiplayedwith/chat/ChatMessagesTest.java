@@ -25,21 +25,30 @@ class ChatMessagesTest {
     private static final UUID STEVE = UUID.fromString("61699b2e-d327-4a01-9f1e-0ea8c3f06bc6");
 
     @Test
+    void unplayedUsernamesAreItalic() {
+        Component notPlayed = QueryMessages.notPlayedWith("Alex", STEVE);
+        assertUsername(arg(notPlayed, 0), "Alex", true);
+
+        Component confirm = NoteMessages.noteConfirm("Alex", STEVE);
+        assertUsername(arg(confirm, 0), "Alex", true);
+    }
+
+    @Test
     void usernamesAreClickableAndShareAColor() {
         Component played = QueryMessages.playedWith(snapshot());
         Component name = arg(played, 0);
-        assertUsername(name, "Alex");
+        assertUsername(name, "Alex", false);
 
         Component past = arg(QueryMessages.pastNames(snapshot()), 0);
         Component pastName = firstSibling(past);
-        assertUsername(pastName, "Steve");
+        assertUsername(pastName, "Steve", false);
 
         Component unknown = arg(QueryMessages.unknownAccount("Notch"), 0);
-        assertUsername(unknown, "Notch");
+        assertUsername(unknown, "Notch", false);
 
         Component renamed = RenameMessages.playerRenamed("Steve", "Alex", STEVE);
-        assertUsername(arg(renamed, 0), "Steve");
-        assertUsername(arg(renamed, 1), "Alex");
+        assertUsername(arg(renamed, 0), "Steve", false);
+        assertUsername(arg(renamed, 1), "Alex", false);
     }
 
     @Test
@@ -74,7 +83,7 @@ class ChatMessagesTest {
     @Test
     void clickHereIsUnderlinedGrayWording() {
         Component confirm = NoteMessages.noteConfirm("Alex", STEVE);
-        assertUsername(arg(confirm, 0), "Alex");
+        assertUsername(arg(confirm, 0), "Alex", true);
         Component click = arg(confirm, 1);
         assertEquals("haveiplayedwith.note.confirm.click", key(click));
         assertEquals(TextColor.GRAY.getValue(), click.getStyle().getColor().getValue());
@@ -122,12 +131,12 @@ class ChatMessagesTest {
         );
     }
 
-    private static void assertUsername(Component name, String expected) {
+    private static void assertUsername(Component name, String expected, boolean italic) {
         assertEquals(expected, literal(name));
         assertEquals(ChatStyle.NAME, color(name));
         assertEquals(true, name.getStyle().isUnderlined());
         assertInstanceOf(ClickEvent.OpenUrl.class, name.getStyle().getClickEvent());
-        assertEquals(false, name.getStyle().isItalic());
+        assertEquals(italic, name.getStyle().isItalic());
     }
 
     private static Component arg(Component component, int index) {

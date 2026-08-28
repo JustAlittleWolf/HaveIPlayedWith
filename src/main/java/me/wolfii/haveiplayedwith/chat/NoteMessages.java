@@ -40,7 +40,7 @@ public final class NoteMessages {
         );
         return ChatStyle.wording(
             "haveiplayedwith.note.confirm",
-            ChatStyle.username(name, uuid),
+            ChatStyle.username(name, uuid, true),
             click
         );
     }
