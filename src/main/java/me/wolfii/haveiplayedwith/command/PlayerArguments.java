@@ -25,16 +25,14 @@ final class PlayerArguments {
     }
 
     /**
-     * Hyphenated tokens and 32-character hex strings are treated as UUIDs, not names.
+     * Hyphenated tokens and 32-character hex strings are treated as UUIDs, not names, so a
+     * malformed one is reported as a bad UUID rather than looked up as a username.
      */
     static boolean looksLikeUuid(String token) {
         if (token == null || token.isEmpty()) {
             return false;
         }
-        if (token.indexOf('-') >= 0) {
-            return true;
-        }
-        return token.length() == 32 && token.chars().allMatch(ch -> Character.digit(ch, 16) >= 0);
+        return token.indexOf('-') >= 0 || FLAT_UUID.matcher(token).matches();
     }
 
     static ResolvedPlayer parseToken(String token) {

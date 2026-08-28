@@ -7,6 +7,7 @@ import me.wolfii.haveiplayedwith.store.PlayerSnapshot;
 import me.wolfii.haveiplayedwith.store.PlayerStore;
 import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.function.Supplier;
@@ -50,7 +51,7 @@ final class PlayerLookup {
     private void show(FabricClientCommandSource source, PlayerSnapshot match) {
         mojang.lookupUuid(match.uuid()).ifPresent(profile -> {
             if (!profile.username().equals(match.currentUsername())) {
-                players.applyMojangUsername(match.uuid(), profile.username(), java.time.Instant.now());
+                players.applyMojangUsername(match.uuid(), profile.username(), Instant.now());
             }
         });
         PlayerSnapshot latest = players.get(match.uuid()).orElse(match);

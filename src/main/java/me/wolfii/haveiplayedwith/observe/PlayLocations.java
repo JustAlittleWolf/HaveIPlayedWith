@@ -17,8 +17,9 @@ import java.util.Locale;
  * local worlds use {@code world/{worldname}}.
  */
 public final class PlayLocations {
-    public static final String LOCAL_PREFIX = "world/";
-    private static final String DEFAULT_PORT = "25565";
+    private static final String LOCAL_PREFIX = "world/";
+    private static final int DEFAULT_PORT = 25565;
+    private static final String DEFAULT_PORT_SUFFIX = ":" + DEFAULT_PORT;
 
     private PlayLocations() {
     }
@@ -66,7 +67,7 @@ public final class PlayLocations {
             if (close > 0) {
                 String host = trimmed.substring(0, close + 1).toLowerCase(Locale.ROOT);
                 String rest = trimmed.substring(close + 1);
-                if (rest.isEmpty() || (":" + DEFAULT_PORT).equals(rest)) {
+                if (rest.isEmpty() || DEFAULT_PORT_SUFFIX.equals(rest)) {
                     return host;
                 }
                 return host + rest;
@@ -75,11 +76,8 @@ public final class PlayLocations {
         int colon = trimmed.lastIndexOf(':');
         if (colon > 0 && trimmed.indexOf(':') == colon) {
             String host = trimmed.substring(0, colon).toLowerCase(Locale.ROOT);
-            String port = trimmed.substring(colon + 1);
-            if (DEFAULT_PORT.equals(port)) {
-                return host;
-            }
-            return host + ":" + port;
+            String port = trimmed.substring(colon);
+            return DEFAULT_PORT_SUFFIX.equals(port) ? host : host + port;
         }
         return trimmed.toLowerCase(Locale.ROOT);
     }
@@ -123,7 +121,7 @@ public final class PlayLocations {
             if (host == null || host.isBlank()) {
                 return null;
             }
-            return port > 0 && port != Integer.parseInt(DEFAULT_PORT)
+            return port > 0 && port != DEFAULT_PORT
                 ? remoteServer(host + ":" + port)
                 : remoteServer(host);
         }

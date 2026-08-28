@@ -54,10 +54,6 @@ public final class ImportControls {
         scheduled.set(false);
     }
 
-    public boolean scheduled() {
-        return scheduled.get();
-    }
-
     public void clearStop() {
         stopRequested.set(false);
     }

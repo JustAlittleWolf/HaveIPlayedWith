@@ -45,10 +45,6 @@ public final class UsernameExtractor {
         return colonName(line);
     }
 
-    public static boolean isUsername(String name) {
-        return MinecraftUsernames.isValid(name);
-    }
-
     private static Optional<String> angledName(String line) {
         if (!line.startsWith("<")) {
             return Optional.empty();
@@ -58,7 +54,7 @@ public final class UsernameExtractor {
             return Optional.empty();
         }
         String name = line.substring(1, end);
-        return isUsername(name) ? Optional.of(name) : Optional.empty();
+        return MinecraftUsernames.isValid(name) ? Optional.of(name) : Optional.empty();
     }
 
     private static Optional<String> colonName(String line) {
