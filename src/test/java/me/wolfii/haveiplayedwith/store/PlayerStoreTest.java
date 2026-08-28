@@ -15,9 +15,13 @@ class PlayerStoreTest {
     @TempDir
     Path temp;
 
+    private PlayerStore open() {
+        return new PlayerStore(temp.resolve("database"));
+    }
+
     @Test
     void recordsPlayAndFindsPastNames() {
-        try (PlayerStore players = new PlayerStore(temp.resolve("players.mv"))) {
+        try (PlayerStore players = open()) {
             UUID uuid = UUID.fromString("61699b2e-d327-4a01-9f1e-0ea8c3f06bc6");
             players.recordLivePlay(uuid, "Steve", LocalDate.of(2026, 8, 1), "live:one", "hypixel.net");
             players.recordLivePlay(uuid, "Steve", LocalDate.of(2026, 8, 1), "live:one", "hypixel.net");
@@ -45,7 +49,7 @@ class PlayerStoreTest {
 
     @Test
     void importDoesNotAddMinutes() {
-        try (PlayerStore players = new PlayerStore(temp.resolve("players.mv"))) {
+        try (PlayerStore players = open()) {
             UUID uuid = UUID.randomUUID();
             players.recordImportedSighting(uuid, "OldName", "Current", LocalDate.of(2026, 1, 1), "atl:file:a", Instant.parse("2026-01-01T12:00:00Z"));
             PlayerSnapshot snapshot = players.get(uuid).orElseThrow();
@@ -59,7 +63,7 @@ class PlayerStoreTest {
 
     @Test
     void importOnlyRecordsTheNameThatWasSeen() {
-        try (PlayerStore players = new PlayerStore(temp.resolve("players.mv"))) {
+        try (PlayerStore players = open()) {
             UUID uuid = UUID.randomUUID();
             players.recordImportedSighting(uuid, "OldName", "Current", LocalDate.of(2026, 1, 1), "atl:file:a", Instant.parse("2026-01-01T12:00:00Z"));
             List<String> seen = players.get(uuid).orElseThrow().names().stream().map(SeenName::username).toList();
@@ -69,7 +73,7 @@ class PlayerStoreTest {
 
     @Test
     void notesDoNotCountAsHavingPlayedTogether() {
-        try (PlayerStore players = new PlayerStore(temp.resolve("players.mv"))) {
+        try (PlayerStore players = open()) {
             UUID uuid = UUID.randomUUID();
             players.setNote(uuid, "Ghost", "met them on Discord");
             PlayerSnapshot snapshot = players.get(uuid).orElseThrow();
@@ -88,12 +92,12 @@ class PlayerStoreTest {
     @Test
     void serverMinutesPersistAcrossReopen() {
         UUID uuid = UUID.randomUUID();
-        try (PlayerStore players = new PlayerStore(temp.resolve("players.mv"))) {
+        try (PlayerStore players = open()) {
             players.recordLivePlay(uuid, "Steve", LocalDate.of(2026, 8, 1), "live:one", "world/Creative");
             players.recordLivePlay(uuid, "Steve", LocalDate.of(2026, 8, 1), "live:one", "world/Creative");
             players.recordLivePlay(uuid, "Steve", LocalDate.of(2026, 8, 2), "live:two", "mc.example.com:25566");
         }
-        try (PlayerStore players = new PlayerStore(temp.resolve("players.mv"))) {
+        try (PlayerStore players = open()) {
             PlayerSnapshot snapshot = players.get(uuid).orElseThrow();
             assertEquals(3, snapshot.totalMinutes());
             assertEquals(List.of(
@@ -105,7 +109,7 @@ class PlayerStoreTest {
 
     @Test
     void sameSessionIdCountsOnceAcrossServers() {
-        try (PlayerStore players = new PlayerStore(temp.resolve("players.mv"))) {
+        try (PlayerStore players = open()) {
             UUID uuid = UUID.randomUUID();
             players.recordLivePlay(uuid, "Steve", LocalDate.of(2026, 8, 1), "live:boot", "hypixel.net");
             players.recordLivePlay(uuid, "Steve", LocalDate.of(2026, 8, 1), "live:boot", "world/Survival");
@@ -118,7 +122,7 @@ class PlayerStoreTest {
 
     @Test
     void currentSessionMinutesDoNotCountAsPlayedBefore() {
-        try (PlayerStore players = new PlayerStore(temp.resolve("players.mv"))) {
+        try (PlayerStore players = open()) {
             UUID uuid = UUID.randomUUID();
             players.recordLivePlay(uuid, "Steve", LocalDate.of(2026, 8, 1), "live:now", "hypixel.net");
             players.recordLivePlay(uuid, "Steve", LocalDate.of(2026, 8, 1), "live:now", "hypixel.net");
@@ -138,7 +142,7 @@ class PlayerStoreTest {
 
     @Test
     void blankServerIdDoesNotCreateAServerRow() {
-        try (PlayerStore players = new PlayerStore(temp.resolve("players.mv"))) {
+        try (PlayerStore players = open()) {
             UUID uuid = UUID.randomUUID();
             players.recordLivePlay(uuid, "Steve", LocalDate.of(2026, 8, 1), "live:one", null);
             players.recordLivePlay(uuid, "Steve", LocalDate.of(2026, 8, 1), "live:one", " ");
@@ -150,12 +154,12 @@ class PlayerStoreTest {
 
     @Test
     void persistsMojangNameLookups() {
-        try (PlayerStore players = new PlayerStore(temp.resolve("players.mv"))) {
+        try (PlayerStore players = open()) {
             UUID uuid = UUID.fromString("61699b2e-d327-4a01-9f1e-0ea8c3f06bc6");
             players.mojangProfiles().putName("steve", new MojangNameCache(uuid, "Steve", Instant.parse("2026-08-01T00:00:00Z")));
             players.mojangProfiles().putName("nobody", new MojangNameCache(null, "", Instant.parse("2026-08-01T00:00:00Z")));
         }
-        try (PlayerStore players = new PlayerStore(temp.resolve("players.mv"))) {
+        try (PlayerStore players = open()) {
             MojangNameCache steve = players.mojangProfiles().byName("steve").orElseThrow();
             assertEquals(UUID.fromString("61699b2e-d327-4a01-9f1e-0ea8c3f06bc6"), steve.uuid());
             assertEquals("Steve", steve.username());
@@ -169,7 +173,7 @@ class PlayerStoreTest {
     void lastPlayedTogetherIgnoresToday() {
         LocalDate today = LocalDate.now();
         LocalDate earlier = today.minusDays(5);
-        try (PlayerStore players = new PlayerStore(temp.resolve("players.mv"))) {
+        try (PlayerStore players = open()) {
             UUID uuid = UUID.randomUUID();
             players.recordLivePlay(uuid, "Steve", earlier, "live:one", "hypixel.net");
             players.recordLivePlay(uuid, "Steve", earlier, "live:one", "hypixel.net");
@@ -182,7 +186,7 @@ class PlayerStoreTest {
 
     @Test
     void onlyTodayHasNoEarlierPlayDay() {
-        try (PlayerStore players = new PlayerStore(temp.resolve("players.mv"))) {
+        try (PlayerStore players = open()) {
             UUID uuid = UUID.randomUUID();
             players.recordLivePlay(uuid, "Steve", LocalDate.now(), "live:one", "hypixel.net");
             assertTrue(players.get(uuid).orElseThrow().lastPlayedBeforeToday().isEmpty());
@@ -191,7 +195,7 @@ class PlayerStoreTest {
 
     @Test
     void noteTimestampSurvivesPlayUpdates() {
-        try (PlayerStore players = new PlayerStore(temp.resolve("players.mv"))) {
+        try (PlayerStore players = open()) {
             UUID uuid = UUID.randomUUID();
             players.setNote(uuid, "Steve", "met on Discord");
             Instant taken = players.get(uuid).orElseThrow().noteTakenAt().orElseThrow();
@@ -204,21 +208,20 @@ class PlayerStoreTest {
     }
 
     @Test
-    void storedPlayerRowsDoNotUseNulls() {
-        StoreRows.PlayerRow row = new StoreRows.PlayerRow("Alex", null, 0, 1, 1);
-        assertEquals("Alex", row.currentUsername());
-        assertEquals("", row.note());
-        assertEquals(0L, row.noteTakenAt());
-        String json = new com.google.gson.Gson().toJson(row);
-        assertFalse(json.contains("null"));
-        StoreRows.PlayerRow parsed = new com.google.gson.Gson().fromJson(json, StoreRows.PlayerRow.class);
-        assertEquals("", parsed.note());
-        assertEquals(0L, parsed.noteTakenAt());
+    void blankNoteClearsStoredNote() {
+        try (PlayerStore players = open()) {
+            UUID uuid = UUID.randomUUID();
+            players.setNote(uuid, "Steve", "hello");
+            players.setNote(uuid, "Steve", " ");
+            PlayerSnapshot snapshot = players.get(uuid).orElseThrow();
+            assertTrue(snapshot.note().isEmpty());
+            assertTrue(snapshot.noteTakenAt().isEmpty());
+        }
     }
 
     @Test
     void livePlayReportsPreviousSeenNameOnRename() {
-        try (PlayerStore players = new PlayerStore(temp.resolve("players.mv"))) {
+        try (PlayerStore players = open()) {
             UUID uuid = UUID.randomUUID();
             assertTrue(players.recordLivePlay(uuid, "Steve", LocalDate.of(2026, 8, 1), "live:one", "hypixel.net").isEmpty());
             assertEquals("Steve", players.recordLivePlay(uuid, "Alex", LocalDate.of(2026, 8, 2), "live:two", "hypixel.net").orElseThrow());
@@ -229,7 +232,7 @@ class PlayerStoreTest {
 
     @Test
     void importedPlayersAnnounceWhenFirstSeenLiveUnderANewName() {
-        try (PlayerStore players = new PlayerStore(temp.resolve("players.mv"))) {
+        try (PlayerStore players = open()) {
             UUID uuid = UUID.randomUUID();
             players.recordImportedSighting(uuid, "OldName", "Current", LocalDate.of(2026, 1, 1), "atl:file:a", Instant.parse("2026-01-01T12:00:00Z"));
             assertEquals("OldName", players.recordLivePlay(uuid, "Current", LocalDate.of(2026, 8, 1), "live:one", "hypixel.net").orElseThrow());
@@ -238,7 +241,7 @@ class PlayerStoreTest {
 
     @Test
     void notesAloneDoNotCountAsAPreviouslySeenName() {
-        try (PlayerStore players = new PlayerStore(temp.resolve("players.mv"))) {
+        try (PlayerStore players = open()) {
             UUID uuid = UUID.randomUUID();
             players.setNote(uuid, "Ghost", "met them on Discord");
             assertTrue(players.recordLivePlay(uuid, "Steve", LocalDate.of(2026, 8, 1), "live:one", "hypixel.net").isEmpty());
@@ -247,12 +250,12 @@ class PlayerStoreTest {
 
     @Test
     void importProgressKeepsSilenceAcrossReopen() {
-        try (PlayerStore players = new PlayerStore(temp.resolve("players.mv"))) {
+        try (PlayerStore players = open()) {
             players.importProgress().save(new ImportProgress(
                 ImportProgress.SOURCE_ALLTHELOGS, 12, 100, null, 0, ImportProgress.STATUS_RUNNING, true
             ));
         }
-        try (PlayerStore players = new PlayerStore(temp.resolve("players.mv"))) {
+        try (PlayerStore players = open()) {
             ImportProgress progress = players.importProgress().get(ImportProgress.SOURCE_ALLTHELOGS).orElseThrow();
             assertEquals(12, progress.processed());
             assertTrue(progress.silenced());
