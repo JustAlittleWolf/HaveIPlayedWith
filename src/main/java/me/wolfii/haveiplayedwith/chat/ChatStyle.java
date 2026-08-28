@@ -56,9 +56,7 @@ final class ChatStyle {
     }
 
     static MutableComponent usernameText(String name) {
-        return Component.literal(name).withStyle(style -> style
-            .withColor(rgb(NAME))
-            .withItalic(true));
+        return Component.literal(name).withStyle(style -> style.withColor(rgb(NAME)));
     }
 
     static MutableComponent clickable(String key, ClickEvent click, Component hover) {

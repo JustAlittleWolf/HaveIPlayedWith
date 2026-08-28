@@ -25,7 +25,7 @@ class ChatMessagesTest {
     private static final UUID STEVE = UUID.fromString("61699b2e-d327-4a01-9f1e-0ea8c3f06bc6");
 
     @Test
-    void usernamesAreItalicClickableAndShareAColor() {
+    void usernamesAreClickableAndShareAColor() {
         Component played = QueryMessages.playedWith(snapshot());
         Component name = arg(played, 0);
         assertUsername(name, "Alex");
@@ -125,9 +125,9 @@ class ChatMessagesTest {
     private static void assertUsername(Component name, String expected) {
         assertEquals(expected, literal(name));
         assertEquals(ChatStyle.NAME, color(name));
-        assertEquals(true, name.getStyle().isItalic());
         assertEquals(true, name.getStyle().isUnderlined());
         assertInstanceOf(ClickEvent.OpenUrl.class, name.getStyle().getClickEvent());
+        assertEquals(false, name.getStyle().isItalic());
     }
 
     private static Component arg(Component component, int index) {
