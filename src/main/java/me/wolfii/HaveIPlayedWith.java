@@ -16,39 +16,39 @@ import org.slf4j.LoggerFactory;
 import java.nio.file.Files;
 
 public class HaveIPlayedWith implements ClientModInitializer {
-	public static final String MOD_ID = "haveiplayedwith";
-	public static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
+    public static final String MOD_ID = "haveiplayedwith";
+    public static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
 
-	private PlayerDatabase database;
-	private PlayerObserver observer;
+    private PlayerDatabase database;
+    private PlayerObserver observer;
 
-	@Override
-	public void onInitializeClient() {
-		try {
-			Files.createDirectories(HipwPaths.directory());
-			database = new PlayerDatabase(HipwPaths.databaseFile());
-			MojangClient mojang = new MojangClient(database);
-			CraftyClient crafty = new CraftyClient(database);
-			observer = new PlayerObserver(database, mojang);
-			observer.register();
-			ImportControls imports = new ImportControls(database);
-			if (FabricLoader.getInstance().isModLoaded("allthelogs")) {
-				AllTheLogsCompat.install(database, crafty, imports);
-			}
-			new HipwCommands(database, mojang, imports).register();
-			ClientLifecycleEvents.CLIENT_STOPPING.register(client -> close());
-			LOGGER.info("Have I Played With initialized ({})", HipwPaths.databaseFile());
-		} catch (Exception e) {
-			throw new IllegalStateException("Failed to initialize Have I Played With", e);
-		}
-	}
+    @Override
+    public void onInitializeClient() {
+        try {
+            Files.createDirectories(HipwPaths.directory());
+            database = new PlayerDatabase(HipwPaths.databaseFile());
+            MojangClient mojang = new MojangClient(database);
+            CraftyClient crafty = new CraftyClient(database);
+            observer = new PlayerObserver(database, mojang);
+            observer.register();
+            ImportControls imports = new ImportControls(database);
+            if (FabricLoader.getInstance().isModLoaded("allthelogs")) {
+                AllTheLogsCompat.install(database, crafty, imports);
+            }
+            new HipwCommands(database, mojang, imports).register();
+            ClientLifecycleEvents.CLIENT_STOPPING.register(client -> close());
+            LOGGER.info("Have I Played With initialized ({})", HipwPaths.databaseFile());
+        } catch (Exception e) {
+            throw new IllegalStateException("Failed to initialize Have I Played With", e);
+        }
+    }
 
-	private void close() {
-		if (observer != null) {
-			observer.close();
-		}
-		if (database != null) {
-			database.close();
-		}
-	}
+    private void close() {
+        if (observer != null) {
+            observer.close();
+        }
+        if (database != null) {
+            database.close();
+        }
+    }
 }
