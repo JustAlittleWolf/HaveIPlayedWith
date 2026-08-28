@@ -1,88 +1,74 @@
 plugins {
-	id 'net.fabricmc.fabric-loom' version "${loom_version}"
-	id 'maven-publish'
+    id 'net.fabricmc.fabric-loom' version "${loom_version}"
 }
 
 version = project.version
 group = project.maven_group
 
 base {
-	archivesName = project.archives_base_name
+    archivesName = project.archives_base_name + "+" + project.minecraft_version
 }
 
 repositories {
-	maven {
-		name = 'Modrinth'
-		url = 'https://api.modrinth.com/maven'
-	}
-	mavenCentral()
+    maven {
+        name = 'Modrinth'
+        url = 'https://api.modrinth.com/maven'
+    }
+    mavenCentral()
 }
 
 dependencies {
-	minecraft "com.mojang:minecraft:${project.minecraft_version}"
-	implementation "net.fabricmc:fabric-loader:${project.loader_version}"
-	implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+    minecraft "com.mojang:minecraft:${project.minecraft_version}"
+    implementation "net.fabricmc:fabric-loader:${project.loader_version}"
+    implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
 
-	// Java has no built-in database. H2 MVStore is a ~350 KB pure-Java single-file store.
-	include implementation('com.h2database:h2-mvstore:2.4.240')
+    include implementation("com.h2database:h2-mvstore:${project.h2_mvstore_version}")
 
-	// Optional AllTheLogs API, never packaged. This coordinate is not published yet;
-	// it is always resolved from the git submodule through the includeBuild
-	// substitution in settings.gradle. Once AllTheLogs publishes to Modrinth Maven,
-	// pin a real version here and drop that includeBuild.
-	compileOnly('maven.modrinth:allthelogs:oFCSt7wx') {
-		transitive = false
-	}
+    // Optional AllTheLogs API, never packaged. This coordinate is not published yet;
+    // it is always resolved from the git submodule through the includeBuild
+    // substitution in settings.gradle. Once AllTheLogs publishes to Modrinth Maven,
+    // pin a real version here and drop that includeBuild.
+    compileOnly("maven.modrinth:allthelogs:${project.all_the_logs_version}") {
+        transitive = false
+    }
 
-	testImplementation 'com.h2database:h2-mvstore:2.4.240'
-	testImplementation 'com.google.code.gson:gson:2.13.1'
-	testImplementation 'org.junit.jupiter:junit-jupiter:5.11.4'
-	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    testImplementation "com.h2database:h2-mvstore:${project.h2_mvstore_version}"
+    testImplementation 'com.google.code.gson:gson:2.13.1'
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.11.4'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 
 processResources {
-	def props = ["version": project.version]
-	inputs.properties props
+    def props = ["version": project.version]
+    inputs.properties props
 
-	filesMatching("fabric.mod.json") {
-		expand props
-	}
+    filesMatching("fabric.mod.json") {
+        expand props
+    }
 }
 
 tasks.withType(JavaCompile).configureEach {
-	it.options.release = 25
+    it.options.release = 25
 }
 
 java {
-	withSourcesJar()
-	sourceCompatibility = JavaVersion.VERSION_25
-	targetCompatibility = JavaVersion.VERSION_25
-	toolchain {
-		languageVersion = JavaLanguageVersion.of(25)
-	}
+    withSourcesJar()
+    sourceCompatibility = JavaVersion.VERSION_25
+    targetCompatibility = JavaVersion.VERSION_25
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(25)
+    }
 }
 
 tasks.named('test', Test).configure {
-	useJUnitPlatform()
+    useJUnitPlatform()
 }
 
 jar {
-	def archivesName = project.base.archivesName.get()
-	inputs.property "archivesName", archivesName
+    def archivesName = project.base.archivesName.get()
+    inputs.property "archivesName", archivesName
 
-	from("LICENSE") {
-		rename { "${it}_${archivesName}" }
-	}
-}
-
-publishing {
-	publications {
-		create("mavenJava", MavenPublication) {
-			from components.java
-		}
-	}
-
-	repositories {
-		// Add repositories to publish to here.
-	}
+    from("LICENSE") {
+        rename { "${it}_${archivesName}" }
+    }
 }

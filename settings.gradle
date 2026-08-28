@@ -1,12 +1,12 @@
 pluginManagement {
-	repositories {
-		maven {
-			name = 'Fabric'
-			url = 'https://maven.fabricmc.net/'
-		}
-		mavenCentral()
-		gradlePluginPortal()
-	}
+    repositories {
+        maven {
+            name = 'Fabric'
+            url = 'https://maven.fabricmc.net/'
+        }
+        mavenCentral()
+        gradlePluginPortal()
+    }
 }
 
 rootProject.name = 'haveiplayedwith'
@@ -15,14 +15,14 @@ rootProject.name = 'haveiplayedwith'
 // maven.modrinth:allthelogs, so switching to Modrinth Maven later is just
 // removing this includeBuild (keep the same dependency coordinate).
 if (!file('allthelogs/settings.gradle.kts').exists()) {
-	throw new GradleException(
-		"The 'allthelogs' submodule is missing, so the optional AllTheLogs import cannot be compiled.\n" +
-			"Run: git submodule update --init"
-	)
+    throw new GradleException(
+            "The 'allthelogs' submodule is missing, so the optional AllTheLogs import cannot be compiled.\n" +
+                    "Run: git submodule update --init"
+    )
 }
 
 includeBuild('allthelogs') {
-	dependencySubstitution {
-		substitute module('maven.modrinth:allthelogs') using project(':')
-	}
+    dependencySubstitution {
+        substitute module('maven.modrinth:allthelogs') using project(':')
+    }
 }
