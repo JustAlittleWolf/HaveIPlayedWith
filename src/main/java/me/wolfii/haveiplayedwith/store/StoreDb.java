@@ -341,7 +341,7 @@ final class StoreDb implements AutoCloseable {
                     rs.getLong(2),
                     lastTimestamp.isBlank() ? null : LocalDateTime.parse(lastTimestamp),
                     rs.getLong(4),
-                    rs.getString(5),
+                    ImportStatus.fromStorage(rs.getString(5)),
                     rs.getBoolean(6)
                 );
             },
@@ -351,11 +351,12 @@ final class StoreDb implements AutoCloseable {
 
     void saveImportProgress(ImportProgress progress) {
         String lastTimestamp = progress.lastTimestamp() == null ? "" : progress.lastTimestamp().toString();
+        String status = progress.status().storageName();
         upsert(
             "UPDATE import_progress SET processed = ?, total = ?, last_timestamp = ?, skip_count = ?, status = ?, silenced = ? WHERE source_id = ?",
-            List.of(progress.processed(), progress.total(), lastTimestamp, progress.skip(), progress.status(), progress.silenced(), progress.source()),
+            List.of(progress.processed(), progress.total(), lastTimestamp, progress.skip(), status, progress.silenced(), progress.source()),
             "INSERT INTO import_progress (source_id, processed, total, last_timestamp, skip_count, status, silenced) VALUES (?,?,?,?,?,?,?)",
-            List.of(progress.source(), progress.processed(), progress.total(), lastTimestamp, progress.skip(), progress.status(), progress.silenced())
+            List.of(progress.source(), progress.processed(), progress.total(), lastTimestamp, progress.skip(), status, progress.silenced())
         );
     }
 

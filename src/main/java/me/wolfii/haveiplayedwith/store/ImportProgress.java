@@ -8,15 +8,12 @@ public record ImportProgress(
     long total,
     LocalDateTime lastTimestamp,
     long skip,
-    String status,
+    ImportStatus status,
     boolean silenced
 ) {
     public static final String SOURCE_ALLTHELOGS = "allthelogs";
-    public static final String STATUS_RUNNING = "running";
-    public static final String STATUS_STOPPED = "stopped";
-    public static final String STATUS_DONE = "done";
 
-    public ImportProgress withStatus(String status) {
+    public ImportProgress withStatus(ImportStatus status) {
         return new ImportProgress(source, processed, total, lastTimestamp, skip, status, silenced);
     }
 
