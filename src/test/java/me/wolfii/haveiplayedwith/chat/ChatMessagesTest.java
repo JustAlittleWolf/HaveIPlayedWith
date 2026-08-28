@@ -3,11 +3,11 @@ package me.wolfii.haveiplayedwith.chat;
 import me.wolfii.haveiplayedwith.store.PlayerSnapshot;
 import me.wolfii.haveiplayedwith.store.SeenName;
 import me.wolfii.haveiplayedwith.store.ServerPlay;
-import net.minecraft.ChatFormatting;
 import net.minecraft.network.chat.ClickEvent;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.HoverEvent;
 import net.minecraft.network.chat.Style;
+import net.minecraft.network.chat.TextColor;
 import net.minecraft.network.chat.contents.PlainTextContents;
 import net.minecraft.network.chat.contents.TranslatableContents;
 import org.junit.jupiter.api.Test;
@@ -45,20 +45,20 @@ class ChatMessagesTest {
     @Test
     void wordingIsGrayAndHoverOnlyDataIsNotUnderlined() {
         Component played = QueryMessages.playedWith(snapshot());
-        assertEquals(ChatFormatting.GRAY.getColor(), played.getStyle().getColor().getValue());
+        assertEquals(TextColor.GRAY.getValue(), played.getStyle().getColor().getValue());
 
         Component duration = arg(played, 1);
-        assertEquals(ChatFormatting.GRAY.getColor(), duration.getStyle().getColor().getValue());
-        assertEquals(Boolean.FALSE, duration.getStyle().isUnderlined());
+        assertEquals(TextColor.GRAY.getValue(), duration.getStyle().getColor().getValue());
+        assertEquals(false, duration.getStyle().isUnderlined());
         assertEquals(ChatStyle.DURATION, color(arg(duration, 0)));
         assertInstanceOf(HoverEvent.ShowText.class, duration.getStyle().getHoverEvent());
 
         Component days = arg(played, 2);
-        assertEquals(Boolean.FALSE, days.getStyle().isUnderlined());
+        assertEquals(false, days.getStyle().isUnderlined());
         assertEquals(ChatStyle.COUNT, color(arg(days, 0)));
 
         Component sessions = arg(played, 3);
-        assertEquals(Boolean.FALSE, sessions.getStyle().isUnderlined());
+        assertEquals(false, sessions.getStyle().isUnderlined());
         assertEquals(ChatStyle.COUNT, color(arg(sessions, 0)));
 
         Component seenOn = QueryMessages.seenOn(snapshot());
@@ -67,7 +67,7 @@ class ChatMessagesTest {
         Component serverId = arg(firstServer, 0);
         assertEquals("hypixel.net", literal(serverId));
         assertEquals(ChatStyle.SERVER, color(serverId));
-        assertEquals(Boolean.FALSE, serverId.getStyle().isUnderlined());
+        assertEquals(false, serverId.getStyle().isUnderlined());
         assertInstanceOf(HoverEvent.ShowText.class, serverId.getStyle().getHoverEvent());
     }
 
@@ -77,16 +77,16 @@ class ChatMessagesTest {
         assertUsername(arg(confirm, 0), "Alex");
         Component click = arg(confirm, 1);
         assertEquals("haveiplayedwith.note.confirm.click", key(click));
-        assertEquals(ChatFormatting.GRAY.getColor(), click.getStyle().getColor().getValue());
-        assertEquals(Boolean.TRUE, click.getStyle().isUnderlined());
-        assertEquals(Boolean.FALSE, click.getStyle().isItalic());
+        assertEquals(TextColor.GRAY.getValue(), click.getStyle().getColor().getValue());
+        assertEquals(true, click.getStyle().isUnderlined());
+        assertEquals(false, click.getStyle().isItalic());
         assertInstanceOf(ClickEvent.RunCommand.class, click.getStyle().getClickEvent());
     }
 
     @Test
     void importCountsUseTheCountColor() {
         Component progress = ImportMessages.progress(10, 40);
-        assertEquals(ChatFormatting.GRAY.getColor(), progress.getStyle().getColor().getValue());
+        assertEquals(TextColor.GRAY.getValue(), progress.getStyle().getColor().getValue());
         assertEquals(ChatStyle.COUNT, color(arg(progress, 0)));
         assertEquals(ChatStyle.COUNT, color(arg(progress, 1)));
         assertEquals(ChatStyle.COUNT, color(arg(progress, 2)));
@@ -100,7 +100,7 @@ class ChatMessagesTest {
         Component body = arg(note, 0);
         assertEquals("builds nice farms", literal(body));
         assertEquals(ChatStyle.NOTE, color(body));
-        assertEquals(Boolean.FALSE, body.getStyle().isUnderlined());
+        assertEquals(false, body.getStyle().isUnderlined());
         HoverEvent.ShowText hover = assertInstanceOf(HoverEvent.ShowText.class, body.getStyle().getHoverEvent());
         Component hoverText = hover.value();
         assertEquals("haveiplayedwith.note.taken", key(hoverText));
@@ -125,8 +125,8 @@ class ChatMessagesTest {
     private static void assertUsername(Component name, String expected) {
         assertEquals(expected, literal(name));
         assertEquals(ChatStyle.NAME, color(name));
-        assertEquals(Boolean.TRUE, name.getStyle().isItalic());
-        assertEquals(Boolean.TRUE, name.getStyle().isUnderlined());
+        assertEquals(true, name.getStyle().isItalic());
+        assertEquals(true, name.getStyle().isUnderlined());
         assertInstanceOf(ClickEvent.OpenUrl.class, name.getStyle().getClickEvent());
     }
 

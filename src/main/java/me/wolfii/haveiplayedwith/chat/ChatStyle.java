@@ -37,6 +37,10 @@ final class ChatStyle {
         return result;
     }
 
+    static MutableComponent username(String name) {
+        return username(name, (UUID) null);
+    }
+
     static MutableComponent username(String name, UUID uuid) {
         Component hover = uuid == null
             ? wording("haveiplayedwith.namemc.open")

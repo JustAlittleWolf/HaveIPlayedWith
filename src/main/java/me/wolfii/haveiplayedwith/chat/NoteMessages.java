@@ -29,7 +29,7 @@ public final class NoteMessages {
     }
 
     public static Component noteSaved(String name) {
-        return ChatStyle.wording("haveiplayedwith.note.saved", ChatStyle.username(name, null));
+        return ChatStyle.wording("haveiplayedwith.note.saved", ChatStyle.username(name));
     }
 
     public static Component noteConfirm(String name, UUID uuid) {

@@ -76,7 +76,7 @@ public final class QueryMessages {
     }
 
     public static Component unknownAccount(String name) {
-        return ChatStyle.wording("haveiplayedwith.query.unknown_account", ChatStyle.username(name, null));
+        return ChatStyle.wording("haveiplayedwith.query.unknown_account", ChatStyle.username(name));
     }
 
     private static Component dayLabel(int days) {

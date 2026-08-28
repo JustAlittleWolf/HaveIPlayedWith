@@ -1,8 +1,8 @@
 package me.wolfii.haveiplayedwith.chat;
 
-import net.minecraft.ChatFormatting;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.Style;
+import net.minecraft.network.chat.TextColor;
 import net.minecraft.network.chat.contents.PlainTextContents;
 import net.minecraft.network.chat.contents.TranslatableContents;
 import org.junit.jupiter.api.Test;
@@ -47,10 +47,10 @@ class DurationFormatTest {
     @Test
     void compactWordingIsGrayAndValuesUseDurationColor() {
         Component compact = DurationFormat.compact(59);
-        assertEquals(ChatFormatting.GRAY.getColor(), compact.getStyle().getColor().getValue());
+        assertEquals(TextColor.GRAY.getValue(), compact.getStyle().getColor().getValue());
         assertEquals(ChatStyle.DURATION, color(args(compact)[0]));
-        assertEquals(Boolean.FALSE, compact.getStyle().isUnderlined());
-        assertEquals(Boolean.FALSE, compact.getStyle().isItalic());
+        assertEquals(false, compact.getStyle().isUnderlined());
+        assertEquals(false, compact.getStyle().isItalic());
     }
 
     private static void assertTranslation(String expectedKey, Component component, Component... expectedArgs) {
