@@ -13,11 +13,17 @@ import org.spongepowered.asm.mixin.injection.At;
 @Mixin(EntityArgument.class)
 public class EntityArgumentMixin implements ClientEntityArgument {
     @Unique
-    public boolean alwaysAllowAtSelectors;
+    private Boolean allowAtSelectorsOverride;
 
     @Override
     public EntityArgument clientDataCommandUpdated$withAlwaysAllowAtSelectors() {
-        alwaysAllowAtSelectors = true;
+        allowAtSelectorsOverride = true;
+        return (EntityArgument) (Object) this;
+    }
+
+    @Override
+    public EntityArgument clientDataCommandUpdated$withoutAtSelectors() {
+        allowAtSelectorsOverride = false;
         return (EntityArgument) (Object) this;
     }
 
@@ -29,7 +35,9 @@ public class EntityArgumentMixin implements ClientEntityArgument {
         )
     )
     private <S> boolean parseOverrideShouldAllowAtSelectors(S source, Operation<Boolean> original) {
-        if (alwaysAllowAtSelectors) return true;
+        if (allowAtSelectorsOverride != null) {
+            return allowAtSelectorsOverride;
+        }
         return original.call(source);
     }
 
@@ -41,7 +49,9 @@ public class EntityArgumentMixin implements ClientEntityArgument {
         )
     )
     private boolean listSuggestionsOverrideShouldAllowAtSelectors(PermissionSet instance, Permission permission, Operation<Boolean> original) {
-        if (alwaysAllowAtSelectors) return true;
+        if (allowAtSelectorsOverride != null) {
+            return allowAtSelectorsOverride;
+        }
         return original.call(instance, permission);
     }
 }

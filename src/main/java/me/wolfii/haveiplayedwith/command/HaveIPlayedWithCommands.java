@@ -37,7 +37,7 @@ public final class HaveIPlayedWithCommands {
 
     private void register(CommandDispatcher<FabricClientCommandSource> dispatcher) {
         dispatcher.register(ClientCommands.literal("haveiplayedwith")
-            .then(ClientCommands.argument("player", ClientEntityArgument.player())
+            .then(ClientCommands.argument("player", ClientEntityArgument.playerNameOrUuid())
                 .executes(context -> {
                     PlayerArguments.ResolvedPlayer target = PlayerArguments.resolvePlayer(context, "player");
                     if (target == null) {
