@@ -5,7 +5,6 @@ import net.minecraft.network.chat.ClickEvent;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.HoverEvent;
 import net.minecraft.network.chat.MutableComponent;
-import net.minecraft.network.chat.Style;
 import net.minecraft.network.chat.TextColor;
 
 import java.net.URI;
@@ -124,12 +123,12 @@ public final class QueryMessages {
 		MutableComponent hover = uuid == null
 			? Component.literal("Open NameMC").withStyle(ChatFormatting.GRAY)
 			: Component.literal(uuid.toString()).withStyle(style -> style.withColor(rgb(UUID_COLOR)));
-		return Component.literal(name).withStyle(style -> {
-			Style next = style.withColor(rgb(color)).withUnderlined(true).withItalic(italic)
-				.withClickEvent(new ClickEvent.OpenUrl(URI.create("https://namemc.com/profile/" + name)))
-				.withHoverEvent(new HoverEvent.ShowText(hover));
-			return next;
-		});
+		return Component.literal(name).withStyle(style -> style
+			.withColor(rgb(color))
+			.withUnderlined(true)
+			.withItalic(italic)
+			.withClickEvent(new ClickEvent.OpenUrl(URI.create("https://namemc.com/profile/" + name)))
+			.withHoverEvent(new HoverEvent.ShowText(hover)));
 	}
 
 	private static MutableComponent colored(String text, int color) {

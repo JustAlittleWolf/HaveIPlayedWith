@@ -8,7 +8,6 @@ import java.nio.file.Path;
  * Instance-relative paths. The database lives in {@code .config/haveiplayedwith}.
  */
 public final class HipwPaths {
-	public static final String DIRECTORY = ".config/haveiplayedwith";
 	public static final String DATABASE_FILE_NAME = "players.sqlite";
 
 	private HipwPaths() {

@@ -157,9 +157,7 @@ public final class HipwCommands {
 			}
 		});
 		try {
-			if (!latch.await(2, TimeUnit.SECONDS)) {
-				return found.get();
-			}
+			latch.await(2, TimeUnit.SECONDS);
 		} catch (InterruptedException e) {
 			Thread.currentThread().interrupt();
 		}

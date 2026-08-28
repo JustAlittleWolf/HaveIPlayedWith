@@ -53,17 +53,6 @@ public final class MojangClient {
 		return Instant.now().minus(STALE_AFTER).isAfter(cache.fetchedAt());
 	}
 
-	public Optional<String> usernameIfFreshMatch(UUID uuid, String observedName) {
-		Optional<PlayerDatabase.MojangCache> cache = cached(uuid);
-		if (cache.isEmpty() || cache.get().username() == null) {
-			return Optional.empty();
-		}
-		if (!cache.get().username().equalsIgnoreCase(observedName)) {
-			return Optional.empty();
-		}
-		return Optional.of(cache.get().username());
-	}
-
 	public boolean isFreshMismatch(UUID uuid, String observedName) {
 		Optional<PlayerDatabase.MojangCache> cache = cached(uuid);
 		if (cache.isEmpty() || cache.get().username() == null) {
@@ -107,9 +96,11 @@ public final class MojangClient {
 		if (memory != null) {
 			return memory;
 		}
-		Optional<Profile> fetched = fetchName(username);
-		nameMemory.put(key, fetched);
-		return fetched;
+		NameAnswer answer = fetchName(username);
+		if (answer.definitive()) {
+			nameMemory.put(key, answer.profile());
+		}
+		return answer.profile();
 	}
 
 	private Optional<Profile> fetchUuid(UUID uuid) {
@@ -141,26 +132,33 @@ public final class MojangClient {
 		}
 	}
 
-	private Optional<Profile> fetchName(String username) {
+	/** A name lookup result, plus whether the API actually answered so it may be remembered. */
+	private record NameAnswer(Optional<Profile> profile, boolean definitive) {
+		static NameAnswer unknown() {
+			return new NameAnswer(Optional.empty(), false);
+		}
+	}
+
+	private NameAnswer fetchName(String username) {
 		try {
 			limiter.acquire();
 			String encoded = URLEncoder.encode(username, StandardCharsets.UTF_8);
 			HttpResponse<String> response = HttpJson.get(NAME_LOOKUP + encoded);
 			int status = response.statusCode();
 			if (status == 204 || status == 404) {
-				return Optional.empty();
+				return new NameAnswer(Optional.empty(), true);
 			}
 			if (status / 100 != 2) {
 				LOGGER.debug("Mojang name lookup {} returned {}", username, status);
-				return Optional.empty();
+				return NameAnswer.unknown();
 			}
-			return readProfile(response.body());
+			return new NameAnswer(readProfile(response.body()), true);
 		} catch (InterruptedException e) {
 			Thread.currentThread().interrupt();
-			return Optional.empty();
+			return NameAnswer.unknown();
 		} catch (Exception e) {
 			LOGGER.debug("Mojang name lookup failed for {}", username, e);
-			return Optional.empty();
+			return NameAnswer.unknown();
 		}
 	}
 

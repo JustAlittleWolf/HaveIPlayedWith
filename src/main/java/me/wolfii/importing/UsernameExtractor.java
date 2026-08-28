@@ -17,7 +17,6 @@ import java.util.regex.Pattern;
  * </ul>
  */
 public final class UsernameExtractor {
-	public static final Pattern USERNAME = MinecraftUsernames.PATTERN;
 	private static final Pattern JOIN_LEAVE = Pattern.compile("^([a-zA-Z0-9_]{3,16}) (?:joined|left)\\b");
 	private static final Pattern NAME_THEN_COLON = Pattern.compile("([a-zA-Z0-9_]{3,16}):");
 
