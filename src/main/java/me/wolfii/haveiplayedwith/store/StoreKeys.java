@@ -8,7 +8,8 @@ import java.util.Locale;
 import java.util.UUID;
 
 /**
- * MVStore key formats. Changing these would break existing {@code players.mv} files.
+ * MVStore key formats. Changing these would break existing {@code players.mv} files
+ * unless {@link StoreMigrator} knows how to convert them.
  */
 final class StoreKeys {
     private StoreKeys() {
@@ -42,11 +43,19 @@ final class StoreKeys {
         return uuid + "\t" + serverId;
     }
 
-    static String nameIndex(String username) {
-        return username.toLowerCase(Locale.ROOT);
+    static String nameIndexPrefix(String username) {
+        return username.toLowerCase(Locale.ROOT) + "\t";
     }
 
-    static int countPrefix(MVMap<String, String> map, String prefix) {
+    static String nameIndex(String username, UUID uuid) {
+        return nameIndexPrefix(username) + uuid;
+    }
+
+    static UUID nameIndexUuid(String key, String prefix) {
+        return UUID.fromString(key.substring(prefix.length()));
+    }
+
+    static int countPrefix(MVMap<String, ?> map, String prefix) {
         int count = 0;
         Iterator<String> keys = map.keyIterator(prefix);
         while (keys.hasNext()) {

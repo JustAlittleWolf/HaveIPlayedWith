@@ -13,17 +13,17 @@ public final class MojangProfileStore {
 
     public Optional<MojangUuidCache> byUuid(UUID uuid) {
         return session.call(() -> {
-            String raw = session.mojangUuid.get(StoreKeys.uuid(uuid));
+            byte[] raw = session.mojangUuid.get(StoreKeys.uuid(uuid));
             if (raw == null) {
                 return Optional.empty();
             }
-            StoreRows.MojangUuidRow row = session.gson().fromJson(raw, StoreRows.MojangUuidRow.class);
+            StoreRows.MojangUuidRow row = StoreCodec.mojangUuid(raw);
             return Optional.of(new MojangUuidCache(row.username(), Instant.ofEpochMilli(row.fetchedAt())));
         });
     }
 
     public void putUuid(UUID uuid, String username, Instant fetchedAt) {
-        session.run(() -> session.mojangUuid.put(StoreKeys.uuid(uuid), session.gson().toJson(new StoreRows.MojangUuidRow(
+        session.run(() -> session.mojangUuid.put(StoreKeys.uuid(uuid), StoreCodec.mojangUuid(new StoreRows.MojangUuidRow(
             username == null ? "" : username,
             fetchedAt.toEpochMilli()
         ))));
@@ -31,11 +31,11 @@ public final class MojangProfileStore {
 
     public Optional<MojangNameCache> byName(String usernameLower) {
         return session.call(() -> {
-            String raw = session.mojangName.get(usernameLower);
+            byte[] raw = session.mojangName.get(usernameLower);
             if (raw == null) {
                 return Optional.empty();
             }
-            StoreRows.MojangNameRow row = session.gson().fromJson(raw, StoreRows.MojangNameRow.class);
+            StoreRows.MojangNameRow row = StoreCodec.mojangName(raw);
             UUID uuid = row.uuid().isBlank() ? null : UUID.fromString(row.uuid());
             String username = row.username().isBlank() ? null : row.username();
             return Optional.of(new MojangNameCache(uuid, username, Instant.ofEpochMilli(row.fetchedAt())));
@@ -43,7 +43,7 @@ public final class MojangProfileStore {
     }
 
     public void putName(String usernameLower, MojangNameCache cache) {
-        session.run(() -> session.mojangName.put(usernameLower, session.gson().toJson(new StoreRows.MojangNameRow(
+        session.run(() -> session.mojangName.put(usernameLower, StoreCodec.mojangName(new StoreRows.MojangNameRow(
             cache.uuid() == null ? "" : cache.uuid().toString(),
             cache.username() == null ? "" : cache.username(),
             cache.fetchedAt().toEpochMilli()

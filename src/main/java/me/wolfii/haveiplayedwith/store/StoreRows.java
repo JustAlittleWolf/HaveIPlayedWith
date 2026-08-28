@@ -3,8 +3,8 @@ package me.wolfii.haveiplayedwith.store;
 import java.util.Objects;
 
 /**
- * JSON shapes stored in MVStore maps. Field names are part of the on-disk format.
- * String fields are never stored as JSON null: absent values are empty strings, and
+ * In-memory row shapes encoded by {@link StoreCodec}.
+ * String fields are never null: absent values are empty strings, and
  * {@code noteTakenAt} uses {@code 0} when there is no note.
  */
 final class StoreRows {

@@ -12,11 +12,11 @@ public final class ImportProgressStore {
 
     public Optional<ImportProgress> get(String source) {
         return session.call(() -> {
-            String raw = session.imports.get(source);
+            byte[] raw = session.imports.get(source);
             if (raw == null) {
                 return Optional.empty();
             }
-            StoreRows.ImportRow row = session.gson().fromJson(raw, StoreRows.ImportRow.class);
+            StoreRows.ImportRow row = StoreCodec.imports(raw);
             return Optional.of(new ImportProgress(
                 source,
                 row.processed(),
@@ -30,7 +30,7 @@ public final class ImportProgressStore {
     }
 
     public void save(ImportProgress progress) {
-        session.run(() -> session.imports.put(progress.source(), session.gson().toJson(new StoreRows.ImportRow(
+        session.run(() -> session.imports.put(progress.source(), StoreCodec.imports(new StoreRows.ImportRow(
             progress.processed(),
             progress.total(),
             progress.lastTimestamp() == null ? "" : progress.lastTimestamp().toString(),

@@ -12,11 +12,11 @@ public final class CraftyProfileStore {
 
     public Optional<CraftyCache> get(String usernameLower) {
         return session.call(() -> {
-            String raw = session.crafty.get(usernameLower);
+            byte[] raw = session.crafty.get(usernameLower);
             if (raw == null) {
                 return Optional.empty();
             }
-            StoreRows.CraftyRow row = session.gson().fromJson(raw, StoreRows.CraftyRow.class);
+            StoreRows.CraftyRow row = StoreCodec.crafty(raw);
             return Optional.of(new CraftyCache(
                 row.uuid(),
                 row.currentUsername(),
@@ -28,7 +28,7 @@ public final class CraftyProfileStore {
     }
 
     public void put(String usernameLower, CraftyCache cache) {
-        session.run(() -> session.crafty.put(usernameLower, session.gson().toJson(new StoreRows.CraftyRow(
+        session.run(() -> session.crafty.put(usernameLower, StoreCodec.crafty(new StoreRows.CraftyRow(
             cache.uuid() == null ? "" : cache.uuid(),
             cache.currentUsername() == null ? "" : cache.currentUsername(),
             cache.usernamesJson() == null || cache.usernamesJson().isBlank() ? "[]" : cache.usernamesJson(),
