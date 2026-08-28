@@ -99,16 +99,6 @@ public final class PlayerDatabase implements AutoCloseable {
 		void run() throws Exception;
 	}
 
-	public void runAsync(Runnable task) {
-		worker.execute(() -> {
-			try {
-				task.run();
-			} catch (RuntimeException e) {
-				LOGGER.error("HaveIPlayedWith database task failed", e);
-			}
-		});
-	}
-
 	public List<PlayerSnapshot> findByName(String name) {
 		return call(() -> findByNameOnThread(name));
 	}
@@ -117,13 +107,9 @@ public final class PlayerDatabase implements AutoCloseable {
 		return call(() -> loadSnapshot(uuid));
 	}
 
-	public boolean exists(UUID uuid) {
-		return call(() -> existsOnThread(uuid));
-	}
-
 	public void setNote(UUID uuid, String username, String note) {
 		run(() -> {
-			ensurePlayer(uuid, username, Instant.now());
+			ensurePlayerRow(uuid, username);
 			try (PreparedStatement statement = connection.prepareStatement("UPDATE players SET note = ? WHERE uuid = ?")) {
 				if (note == null || note.isBlank()) {
 					statement.setNull(1, Types.VARCHAR);
@@ -141,7 +127,7 @@ public final class PlayerDatabase implements AutoCloseable {
 	public void recordLivePlay(UUID uuid, String username, LocalDate day, String sessionId) {
 		run(() -> {
 			Instant now = Instant.now();
-			ensurePlayer(uuid, username, now);
+			ensurePlayerRow(uuid, username);
 			touchUsername(uuid, username, now);
 			setCurrentUsername(uuid, username);
 			addSession(uuid, sessionId);
@@ -149,10 +135,14 @@ public final class PlayerDatabase implements AutoCloseable {
 		});
 	}
 
+	/**
+	 * Only {@code seenUsername} enters the name history: the name Crafty reports as current was
+	 * never actually seen by this player, so it gets no "last seen" timestamp.
+	 */
 	public void recordImportedSighting(UUID uuid, String seenUsername, String currentUsername, LocalDate day, String sessionId, Instant seenAt) {
 		run(() -> {
 			String display = currentUsername == null || currentUsername.isBlank() ? seenUsername : currentUsername;
-			ensurePlayer(uuid, display, seenAt);
+			ensurePlayerRow(uuid, display);
 			if (currentUsername != null && !currentUsername.isBlank()) {
 				setCurrentUsername(uuid, currentUsername);
 			}
@@ -461,14 +451,13 @@ public final class PlayerDatabase implements AutoCloseable {
 		}
 	}
 
-	private void ensurePlayer(UUID uuid, String username, Instant seenAt) throws SQLException {
+	private void ensurePlayerRow(UUID uuid, String username) throws SQLException {
 		try (PreparedStatement statement = connection.prepareStatement(
 			"INSERT OR IGNORE INTO players(uuid, current_username) VALUES(?, ?)")) {
 			statement.setString(1, uuid.toString());
 			statement.setString(2, username);
 			statement.executeUpdate();
 		}
-		touchUsername(uuid, username, seenAt);
 	}
 
 	private void setCurrentUsername(UUID uuid, String username) throws SQLException {

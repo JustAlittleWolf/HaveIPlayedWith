@@ -49,4 +49,27 @@ class PlayerDatabaseTest {
 			assertEquals("OldName", snapshot.pastNames().getFirst().username());
 		}
 	}
+
+	@Test
+	void importOnlyRecordsTheNameThatWasSeen() {
+		try (PlayerDatabase database = new PlayerDatabase(temp.resolve("players.sqlite"))) {
+			UUID uuid = UUID.randomUUID();
+			database.recordImportedSighting(uuid, "OldName", "Current", LocalDate.of(2026, 1, 1), "atl:file:a", Instant.parse("2026-01-01T12:00:00Z"));
+			List<String> seen = database.get(uuid).orElseThrow().names().stream().map(SeenName::username).toList();
+			assertEquals(List.of("OldName"), seen);
+		}
+	}
+
+	@Test
+	void notesDoNotCountAsHavingPlayedTogether() {
+		try (PlayerDatabase database = new PlayerDatabase(temp.resolve("players.sqlite"))) {
+			UUID uuid = UUID.randomUUID();
+			database.setNote(uuid, "Ghost", "met them on Discord");
+			PlayerSnapshot snapshot = database.get(uuid).orElseThrow();
+			assertEquals(0, snapshot.totalMinutes());
+			assertEquals(0, snapshot.daysPlayed());
+			assertEquals(0, snapshot.sessionCount());
+			assertTrue(snapshot.names().isEmpty());
+		}
+	}
 }
