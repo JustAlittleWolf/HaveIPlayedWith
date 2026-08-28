@@ -3,8 +3,6 @@ package me.wolfii.observe;
 import com.mojang.authlib.GameProfile;
 import me.wolfii.db.PlayerDatabase;
 import me.wolfii.net.MojangClient;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.minecraft.client.Minecraft;
@@ -12,6 +10,8 @@ import net.minecraft.client.multiplayer.ClientPacketListener;
 import net.minecraft.client.multiplayer.PlayerInfo;
 import net.minecraft.client.player.AbstractClientPlayer;
 import net.minecraft.client.player.LocalPlayer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.time.LocalDate;
 import java.util.HashSet;
@@ -23,8 +23,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * Watches the tab list, nearby players, and the local player. Minutes are credited after a
- * Mojang username match, off the client thread.
+ * Watches the tab list and nearby players every tick so joins and name changes are noticed
+ * immediately. Each player is only processed once per calendar minute (cached by UUID + name).
  */
 public final class PlayerObserver {
 	private static final Logger LOGGER = LoggerFactory.getLogger("haveiplayedwith");
@@ -43,8 +43,9 @@ public final class PlayerObserver {
 	private final ConcurrentHashMap<UUID, Sighting> pending = new ConcurrentHashMap<>();
 	private final ArrayBlockingQueue<UUID> queue = new ArrayBlockingQueue<>(MAX_BUFFER);
 	private final ConcurrentHashMap<UUID, Long> creditedMinute = new ConcurrentHashMap<>();
+	private final ConcurrentHashMap<UUID, String> noticedThisMinute = new ConcurrentHashMap<>();
+	private volatile long currentMinute = Long.MIN_VALUE;
 	private volatile String sessionId;
-	private int ticks;
 
 	public PlayerObserver(PlayerDatabase database, MojangClient mojang) {
 		this.database = database;
@@ -57,6 +58,8 @@ public final class PlayerObserver {
 		ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
 			sessionId = null;
 			creditedMinute.clear();
+			noticedThisMinute.clear();
+			currentMinute = Long.MIN_VALUE;
 		});
 		ClientTickEvents.END_CLIENT_TICK.register(this::tick);
 	}
@@ -69,15 +72,12 @@ public final class PlayerObserver {
 		if (client.level == null || client.player == null || client.getConnection() == null) {
 			return;
 		}
-		ticks++;
-		if (ticks % 20 != 0) {
-			return;
-		}
-		String session = sessionId;
-		if (session == null) {
-			session = "live";
-		}
 		long epochMinute = System.currentTimeMillis() / 60_000L;
+		if (epochMinute != currentMinute) {
+			currentMinute = epochMinute;
+			noticedThisMinute.clear();
+		}
+		String session = sessionId == null ? "live" : sessionId;
 		LocalDate day = LocalDate.now();
 		Set<UUID> seen = new HashSet<>();
 		ClientPacketListener connection = client.getConnection();
@@ -103,10 +103,10 @@ public final class PlayerObserver {
 		if (!seen.add(uuid)) {
 			return;
 		}
-		Long last = creditedMinute.get(uuid);
-		if (last != null && last == epochMinute) {
+		if (name.equals(noticedThisMinute.get(uuid))) {
 			return;
 		}
+		noticedThisMinute.put(uuid, name);
 		if (mojang.isFreshMismatch(uuid, name)) {
 			return;
 		}
@@ -149,6 +149,7 @@ public final class PlayerObserver {
 	private void credit(Sighting sighting) {
 		Long last = creditedMinute.put(sighting.uuid(), sighting.epochMinute());
 		if (last != null && last == sighting.epochMinute()) {
+			database.applyMojangUsername(sighting.uuid(), sighting.username(), java.time.Instant.now());
 			return;
 		}
 		database.recordLivePlay(sighting.uuid(), sighting.username(), sighting.day(), "live:" + sighting.sessionId());

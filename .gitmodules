@@ -1,0 +1,3 @@
+[submodule "allthelogs"]
+	path = allthelogs
+	url = https://github.com/JustAlittleWolf/AllTheLogs.git

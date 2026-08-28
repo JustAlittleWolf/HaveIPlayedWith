@@ -11,15 +11,11 @@ base {
 }
 
 repositories {
-	mavenCentral()
-}
-
-sourceSets {
-	allthelogsApi {
-		java {
-			srcDir 'src/allthelogsApi/java'
-		}
+	maven {
+		name = 'Modrinth'
+		url = 'https://api.modrinth.com/maven'
 	}
+	mavenCentral()
 }
 
 dependencies {
@@ -30,7 +26,13 @@ dependencies {
 	// Java has no built-in database. SQLite is a small file-backed engine that fits this dataset.
 	include implementation('org.xerial:sqlite-jdbc:3.50.3.0')
 
-	compileOnly sourceSets.allthelogsApi.output
+	// Optional AllTheLogs API. The git submodule is substituted for this coordinate
+	// via includeBuild in settings.gradle. After AllTheLogs is on Modrinth, drop
+	// that includeBuild and this line keeps working as:
+	//   compileOnly "maven.modrinth:allthelogs:oFCSt7wx"
+	compileOnly('maven.modrinth:allthelogs:oFCSt7wx') {
+		transitive = false
+	}
 
 	testImplementation 'org.xerial:sqlite-jdbc:3.50.3.0'
 	testImplementation 'org.junit.jupiter:junit-jupiter:5.11.4'
@@ -59,10 +61,6 @@ java {
 	}
 }
 
-tasks.named('compileJava', JavaCompile).configure {
-	dependsOn 'compileAllthelogsApiJava'
-}
-
 tasks.named('test', Test).configure {
 	useJUnitPlatform()
 }
@@ -74,10 +72,8 @@ jar {
 	from("LICENSE") {
 		rename { "${it}_${archivesName}" }
 	}
-	exclude 'me/wolfii/allthelogs/**'
 }
 
-// configure the maven publication
 publishing {
 	publications {
 		create("mavenJava", MavenPublication) {

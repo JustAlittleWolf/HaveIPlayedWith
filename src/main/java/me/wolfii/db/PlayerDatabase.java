@@ -21,13 +21,14 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 /**
- * SQLite store for players you've been around. Writes are applied on a single worker thread
- * and committed in batches rather than after every observation.
+ * SQLite store for players you've been around. Each API call is one SQL transaction;
+ * WAL + {@code synchronous=NORMAL} lets SQLite batch the actual disk writes instead of
+ * the application holding an uncommitted transaction.
  */
 public final class PlayerDatabase implements AutoCloseable {
 	private static final Logger LOGGER = LoggerFactory.getLogger("haveiplayedwith");
@@ -37,14 +38,12 @@ public final class PlayerDatabase implements AutoCloseable {
 	public record CraftyCache(String uuid, String currentUsername, String usernamesJson, boolean valid, Instant fetchedAt) {
 	}
 
-	private final ScheduledExecutorService worker = Executors.newSingleThreadScheduledExecutor(runnable -> {
+	private final ExecutorService worker = Executors.newSingleThreadExecutor(runnable -> {
 		Thread thread = new Thread(runnable, "haveiplayedwith-db");
 		thread.setDaemon(true);
 		return thread;
 	});
 	private final Connection connection;
-	private int pendingStatements;
-	private boolean dirty;
 
 	public PlayerDatabase(Path file) {
 		try {
@@ -54,12 +53,12 @@ public final class PlayerDatabase implements AutoCloseable {
 			try (Statement statement = connection.createStatement()) {
 				statement.execute("PRAGMA journal_mode=WAL");
 				statement.execute("PRAGMA synchronous=NORMAL");
+				statement.execute("PRAGMA wal_autocheckpoint=1000");
 				statement.execute("PRAGMA foreign_keys=ON");
 			}
 			connection.setAutoCommit(false);
 			createSchema();
 			connection.commit();
-			worker.scheduleAtFixedRate(this::flushQuietly, 3, 3, TimeUnit.SECONDS);
 		} catch (Exception e) {
 			throw new IllegalStateException("Failed to open HaveIPlayedWith database at " + file, e);
 		}
@@ -67,7 +66,19 @@ public final class PlayerDatabase implements AutoCloseable {
 
 	public <T> T call(Callable<T> task) {
 		try {
-			return worker.submit(task).get();
+			return worker.submit(() -> {
+				try {
+					T result = task.call();
+					connection.commit();
+					return result;
+				} catch (Exception e) {
+					try {
+						connection.rollback();
+					} catch (SQLException ignored) {
+					}
+					throw e;
+				}
+			}).get();
 		} catch (InterruptedException e) {
 			Thread.currentThread().interrupt();
 			throw new IllegalStateException(e);
@@ -121,7 +132,6 @@ public final class PlayerDatabase implements AutoCloseable {
 				}
 				statement.setString(2, uuid.toString());
 				statement.executeUpdate();
-				markDirty();
 			} catch (SQLException e) {
 				throw new IllegalStateException(e);
 			}
@@ -187,7 +197,6 @@ public final class PlayerDatabase implements AutoCloseable {
 				statement.setString(2, username);
 				statement.setLong(3, fetchedAt.toEpochMilli());
 				statement.executeUpdate();
-				markDirty();
 			} catch (SQLException e) {
 				throw new IllegalStateException(e);
 			}
@@ -229,7 +238,6 @@ public final class PlayerDatabase implements AutoCloseable {
 				statement.setInt(5, cache.valid() ? 1 : 0);
 				statement.setLong(6, cache.fetchedAt().toEpochMilli());
 				statement.executeUpdate();
-				markDirty();
 			} catch (SQLException e) {
 				throw new IllegalStateException(e);
 			}
@@ -277,20 +285,23 @@ public final class PlayerDatabase implements AutoCloseable {
 				statement.setLong(5, progress.skip());
 				statement.setString(6, progress.status());
 				statement.executeUpdate();
-				markDirty();
 			} catch (SQLException e) {
 				throw new IllegalStateException(e);
 			}
 		});
 	}
 
-	public void flush() {
-		run(this::commit);
-	}
-
 	@Override
 	public void close() {
-		worker.submit(this::commit);
+		try {
+			run(() -> {
+				try (Statement statement = connection.createStatement()) {
+					statement.execute("PRAGMA wal_checkpoint(TRUNCATE)");
+				}
+			});
+		} catch (RuntimeException e) {
+			LOGGER.warn("Failed to checkpoint HaveIPlayedWith database", e);
+		}
 		worker.shutdown();
 		try {
 			if (!worker.awaitTermination(5, TimeUnit.SECONDS)) {
@@ -456,7 +467,6 @@ public final class PlayerDatabase implements AutoCloseable {
 			statement.setString(1, uuid.toString());
 			statement.setString(2, username);
 			statement.executeUpdate();
-			markDirty();
 		}
 		touchUsername(uuid, username, seenAt);
 	}
@@ -467,7 +477,6 @@ public final class PlayerDatabase implements AutoCloseable {
 			statement.setString(1, username);
 			statement.setString(2, uuid.toString());
 			statement.executeUpdate();
-			markDirty();
 		}
 	}
 
@@ -479,7 +488,6 @@ public final class PlayerDatabase implements AutoCloseable {
 			statement.setString(2, username);
 			statement.setLong(3, seenAt.toEpochMilli());
 			statement.executeUpdate();
-			markDirty();
 		}
 	}
 
@@ -489,7 +497,6 @@ public final class PlayerDatabase implements AutoCloseable {
 			insert.setString(1, uuid.toString());
 			insert.setString(2, sessionId);
 			int added = insert.executeUpdate();
-			markDirty();
 			if (added > 0) {
 				try (PreparedStatement bump = connection.prepareStatement(
 					"UPDATE players SET session_count = session_count + 1 WHERE uuid = ?")) {
@@ -513,7 +520,6 @@ public final class PlayerDatabase implements AutoCloseable {
 			total.setString(1, uuid.toString());
 			total.executeUpdate();
 		}
-		markDirty();
 	}
 
 	private void ensurePlayDay(UUID uuid, LocalDate day) throws SQLException {
@@ -522,38 +528,6 @@ public final class PlayerDatabase implements AutoCloseable {
 			statement.setString(1, uuid.toString());
 			statement.setString(2, day.toString());
 			statement.executeUpdate();
-			markDirty();
-		}
-	}
-
-	private void markDirty() {
-		dirty = true;
-		pendingStatements++;
-		if (pendingStatements >= 80) {
-			commit();
-		}
-	}
-
-	private void flushQuietly() {
-		try {
-			if (dirty) {
-				commit();
-			}
-		} catch (RuntimeException e) {
-			LOGGER.warn("HaveIPlayedWith database flush failed", e);
-		}
-	}
-
-	private void commit() {
-		if (!dirty) {
-			return;
-		}
-		try {
-			connection.commit();
-			dirty = false;
-			pendingStatements = 0;
-		} catch (SQLException e) {
-			throw new IllegalStateException("Failed to commit HaveIPlayedWith database", e);
 		}
 	}
 

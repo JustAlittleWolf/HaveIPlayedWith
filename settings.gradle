@@ -10,3 +10,12 @@ pluginManagement {
 }
 
 rootProject.name = 'haveiplayedwith'
+
+// Compile against the AllTheLogs git checkout. This substitutes
+// maven.modrinth:allthelogs, so switching to Modrinth Maven later is just
+// removing this includeBuild (keep the same dependency coordinate).
+includeBuild('allthelogs') {
+	dependencySubstitution {
+		substitute module('maven.modrinth:allthelogs') using project(':')
+	}
+}
