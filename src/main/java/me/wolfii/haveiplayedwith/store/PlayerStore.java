@@ -17,22 +17,16 @@ import java.util.UUID;
 public final class PlayerStore implements AutoCloseable {
     private final StoreSession session;
     private final MojangProfileStore mojangProfiles;
-    private final CraftyProfileStore craftyProfiles;
     private final ImportProgressStore importProgress;
 
     public PlayerStore(Path file) {
         this.session = StoreSession.open(file);
         this.mojangProfiles = new MojangProfileStore(session);
-        this.craftyProfiles = new CraftyProfileStore(session);
         this.importProgress = new ImportProgressStore(session);
     }
 
     public MojangProfileStore mojangProfiles() {
         return mojangProfiles;
-    }
-
-    public CraftyProfileStore craftyProfiles() {
-        return craftyProfiles;
     }
 
     public ImportProgressStore importProgress() {

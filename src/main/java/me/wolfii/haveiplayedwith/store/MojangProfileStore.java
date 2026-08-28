@@ -1,6 +1,7 @@
 package me.wolfii.haveiplayedwith.store;
 
 import java.time.Instant;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -48,5 +49,20 @@ public final class MojangProfileStore {
             cache.username() == null ? "" : cache.username(),
             cache.fetchedAt().toEpochMilli()
         ))));
+    }
+
+    /** Latest current-name mapping, both directions, one commit. */
+    public void putCurrent(UUID uuid, String username, Instant fetchedAt) {
+        session.run(() -> {
+            session.mojangUuid.put(StoreKeys.uuid(uuid), session.gson().toJson(new StoreRows.MojangUuidRow(
+                username,
+                fetchedAt.toEpochMilli()
+            )));
+            session.mojangName.put(username.toLowerCase(Locale.ROOT), session.gson().toJson(new StoreRows.MojangNameRow(
+                uuid.toString(),
+                username,
+                fetchedAt.toEpochMilli()
+            )));
+        });
     }
 }

@@ -79,7 +79,15 @@ public final class MojangProfileApi {
             return Optional.of(memory);
         }
         Optional<MojangUuidCache> stored = store.byUuid(uuid);
-        stored.ifPresent(cache -> uuidMemory.put(uuid, cache));
+        stored.ifPresent(cache -> {
+            uuidMemory.put(uuid, cache);
+            if (cache.username() != null && !cache.username().isBlank()) {
+                nameMemory.putIfAbsent(
+                    cache.username().toLowerCase(Locale.ROOT),
+                    new MojangNameCache(uuid, cache.username(), cache.fetchedAt())
+                );
+            }
+        });
         return stored;
     }
 
@@ -114,18 +122,24 @@ public final class MojangProfileApi {
         }
         Optional<MojangNameCache> stored = store.byName(key);
         if (stored.isPresent()) {
-            nameMemory.put(key, stored.get());
-            return profileOf(stored.get());
+            MojangNameCache cache = stored.get();
+            nameMemory.put(key, cache);
+            if (cache.uuid() != null && cache.username() != null && !cache.username().isBlank()) {
+                uuidMemory.putIfAbsent(cache.uuid(), new MojangUuidCache(cache.username(), cache.fetchedAt()));
+            }
+            return profileOf(cache);
         }
         NameAnswer answer = fetchName(username);
         if (answer.definitive()) {
             Instant now = Instant.now();
-            MojangNameCache cache = answer.profile()
-                .map(profile -> new MojangNameCache(profile.uuid(), profile.username(), now))
-                .orElse(new MojangNameCache(null, "", now));
-            nameMemory.put(key, cache);
-            store.putName(key, cache);
-            answer.profile().ifPresent(profile -> storeUuid(profile.uuid(), profile.username()));
+            if (answer.profile().isPresent()) {
+                MojangProfile profile = answer.profile().get();
+                rememberCurrent(profile.uuid(), profile.username());
+            } else {
+                MojangNameCache cache = new MojangNameCache(null, "", now);
+                nameMemory.put(key, cache);
+                store.putName(key, cache);
+            }
         }
         return answer.profile();
     }
@@ -182,10 +196,34 @@ public final class MojangProfileApi {
         }
     }
 
+    /**
+     * Remember who currently owns this name. Used after a Mojang fetch and after Crafty
+     * resolves a player during import, so later live play can skip the API.
+     */
+    public void rememberCurrent(UUID uuid, String username) {
+        if (uuid == null || username == null || username.isBlank()) {
+            return;
+        }
+        String key = username.toLowerCase(Locale.ROOT);
+        MojangNameCache existing = nameMemory.get(key);
+        if (existing != null && uuid.equals(existing.uuid())) {
+            uuidMemory.putIfAbsent(uuid, new MojangUuidCache(username, existing.fetchedAt()));
+            return;
+        }
+        Instant now = Instant.now();
+        uuidMemory.put(uuid, new MojangUuidCache(username, now));
+        nameMemory.put(key, new MojangNameCache(uuid, username, now));
+        store.putCurrent(uuid, username, now);
+    }
+
     private void storeUuid(UUID uuid, String username) {
-        MojangUuidCache cache = new MojangUuidCache(username, Instant.now());
-        uuidMemory.put(uuid, cache);
-        store.putUuid(uuid, username, cache.fetchedAt());
+        if (username == null || username.isBlank()) {
+            MojangUuidCache cache = new MojangUuidCache("", Instant.now());
+            uuidMemory.put(uuid, cache);
+            store.putUuid(uuid, "", cache.fetchedAt());
+            return;
+        }
+        rememberCurrent(uuid, username);
     }
 
     /** A name lookup result, plus whether the API actually answered so it may be remembered. */

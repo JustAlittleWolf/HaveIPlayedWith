@@ -28,12 +28,12 @@ public class HaveIPlayedWith implements ClientModInitializer {
             Files.createDirectories(ModPaths.directory());
             players = new PlayerStore(ModPaths.databaseFile());
             MojangProfileApi mojang = new MojangProfileApi(players.mojangProfiles());
-            CraftyPlayerApi crafty = new CraftyPlayerApi(players.craftyProfiles());
+            CraftyPlayerApi crafty = new CraftyPlayerApi();
             observer = new PlayerObserver(players, mojang);
             observer.register();
             ImportControls imports = new ImportControls(players.importProgress());
             if (FabricLoader.getInstance().isModLoaded("allthelogs")) {
-                AllTheLogsCompat.install(players, crafty, imports);
+                AllTheLogsCompat.install(players, crafty, mojang, imports);
             }
             new HaveIPlayedWithCommands(players, mojang, imports).register();
             ClientLifecycleEvents.CLIENT_STOPPING.register(client -> close());
