@@ -2,6 +2,7 @@ package me.wolfii.haveiplayedwith.observe;
 
 import com.mojang.authlib.GameProfile;
 import me.wolfii.haveiplayedwith.MinecraftUsernames;
+import me.wolfii.haveiplayedwith.command.QueryMessages;
 import me.wolfii.haveiplayedwith.net.MojangClient;
 import me.wolfii.haveiplayedwith.store.PlayerDatabase;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
@@ -11,12 +12,14 @@ import net.minecraft.client.multiplayer.ClientPacketListener;
 import net.minecraft.client.multiplayer.PlayerInfo;
 import net.minecraft.client.player.AbstractClientPlayer;
 import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.network.chat.Component;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.HashSet;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.*;
@@ -141,9 +144,6 @@ public final class PlayerObserver {
         while (!Thread.currentThread().isInterrupted()) {
             try {
                 Sighting sighting = sightings.take();
-                if (mojang.isFreshMismatch(sighting.uuid(), sighting.username())) {
-                    continue;
-                }
                 if (!mojang.needsFetch(sighting.uuid(), sighting.username())) {
                     credit(sighting);
                     continue;
@@ -173,9 +173,6 @@ public final class PlayerObserver {
                 if (profile.isEmpty() || !profile.get().username().equalsIgnoreCase(sighting.username())) {
                     continue;
                 }
-                if (!profile.get().username().equals(sighting.username())) {
-                    database.applyMojangUsername(uuid, profile.get().username(), Instant.now());
-                }
                 credit(new Sighting(uuid, profile.get().username(), sighting.day(), sighting.epochMinute(), sighting.sessionId(), sighting.serverId()));
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
@@ -189,10 +186,30 @@ public final class PlayerObserver {
     private void credit(Sighting sighting) {
         Long last = creditedMinute.put(sighting.uuid(), sighting.epochMinute());
         if (last != null && last == sighting.epochMinute()) {
-            database.applyMojangUsername(sighting.uuid(), sighting.username(), Instant.now());
+            announceRename(sighting.uuid(), database.applyMojangUsername(sighting.uuid(), sighting.username(), Instant.now()), sighting.username());
             return;
         }
-        database.recordLivePlay(sighting.uuid(), sighting.username(), sighting.day(), "live:" + sighting.sessionId(), sighting.serverId());
+        announceRename(
+            sighting.uuid(),
+            database.recordLivePlay(sighting.uuid(), sighting.username(), sighting.day(), "live:" + sighting.sessionId(), sighting.serverId()),
+            sighting.username()
+        );
+    }
+
+    private void announceRename(UUID uuid, Optional<String> previousName, String currentName) {
+        if (previousName.isEmpty()) {
+            return;
+        }
+        String previous = previousName.get();
+        Minecraft client = Minecraft.getInstance();
+        client.execute(() -> {
+            LocalPlayer self = client.player;
+            if (self == null || uuid.equals(self.getUUID())) {
+                return;
+            }
+            Component message = QueryMessages.playerRenamed(previous, currentName, uuid);
+            self.sendSystemMessage(message);
+        });
     }
 
     private record Sighting(UUID uuid, String username, LocalDate day, long epochMinute, String sessionId, String serverId) {

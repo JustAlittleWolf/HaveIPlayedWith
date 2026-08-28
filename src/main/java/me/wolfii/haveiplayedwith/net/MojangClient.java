@@ -36,7 +36,7 @@ public final class MojangClient {
     }
 
     private static Optional<Profile> profileOf(MojangNameCache cache) {
-        if (cache.uuid() == null || cache.username() == null) {
+        if (cache.uuid() == null || cache.username() == null || cache.username().isBlank()) {
             return Optional.empty();
         }
         return Optional.of(new Profile(cache.uuid(), cache.username()));
@@ -83,24 +83,17 @@ public final class MojangClient {
         return Instant.now().minus(STALE_AFTER).isAfter(cache.fetchedAt());
     }
 
-    public boolean isFreshMismatch(UUID uuid, String observedName) {
-        Optional<MojangCache> cache = cached(uuid);
-        if (cache.isEmpty() || cache.get().username() == null) {
-            return false;
-        }
-        if (cache.get().username().equalsIgnoreCase(observedName)) {
-            return false;
-        }
-        return !isStale(cache.get());
-    }
-
     public boolean needsFetch(UUID uuid, String observedName) {
         Optional<MojangCache> cache = cached(uuid);
         if (cache.isEmpty()) {
             return true;
         }
-        if (cache.get().username() != null && cache.get().username().equalsIgnoreCase(observedName)) {
+        String cachedName = cache.get().username();
+        if (cachedName != null && !cachedName.isBlank() && cachedName.equalsIgnoreCase(observedName)) {
             return false;
+        }
+        if (cachedName != null && !cachedName.isBlank()) {
+            return true;
         }
         return isStale(cache.get());
     }
@@ -125,7 +118,7 @@ public final class MojangClient {
             Instant now = Instant.now();
             MojangNameCache cache = answer.profile()
                 .map(profile -> new MojangNameCache(profile.uuid(), profile.username(), now))
-                .orElse(new MojangNameCache(null, null, now));
+                .orElse(new MojangNameCache(null, "", now));
             nameMemory.put(key, cache);
             database.putMojangNameCache(key, cache);
             answer.profile().ifPresent(profile -> store(profile.uuid(), profile.username()));
@@ -139,7 +132,7 @@ public final class MojangClient {
             HttpResponse<String> response = HttpJson.get(UUID_LOOKUP + uuid);
             int status = response.statusCode();
             if (status == 204 || status == 404) {
-                store(uuid, null);
+                store(uuid, "");
                 return Optional.empty();
             }
             if (status == 429) {
@@ -151,8 +144,8 @@ public final class MojangClient {
                 return Optional.empty();
             }
             String name = readName(response.body());
-            store(uuid, name);
-            return name == null ? Optional.empty() : Optional.of(new Profile(uuid, name));
+            store(uuid, name == null ? "" : name);
+            return name == null || name.isBlank() ? Optional.empty() : Optional.of(new Profile(uuid, name));
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             return Optional.empty();

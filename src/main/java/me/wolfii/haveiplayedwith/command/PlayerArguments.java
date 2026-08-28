@@ -49,6 +49,21 @@ final class PlayerArguments {
         return found.get();
     }
 
+    static ResolvedPlayer resolvePlayer(CommandContext<FabricClientCommandSource> context, String arg) throws CommandSyntaxException {
+        ClientEntitySelector selector = (ClientEntitySelector) context.getArgument(arg, EntitySelector.class);
+        try {
+            Player found = ClientEntityArgument.getPlayer(context, arg);
+            return new ResolvedPlayer(found.getGameProfile().name(), found.getGameProfile().id());
+        } catch (CommandSyntaxException e) {
+            String name = selector.clientdatacommandupdated$playerName();
+            UUID uuid = selector.clientdatacommandupdated$entityUUID();
+            if (name != null || uuid != null) {
+                return new ResolvedPlayer(name, uuid);
+            }
+            return null;
+        }
+    }
+
     static List<ResolvedPlayer> resolvePlayers(CommandContext<FabricClientCommandSource> context, String arg) throws CommandSyntaxException {
         List<? extends Player> found = ClientEntityArgument.getPlayers(context, arg);
         if (!found.isEmpty()) {

@@ -112,6 +112,14 @@ public final class QueryMessages {
         return gray("haveiplayedwith.note.nothing");
     }
 
+    public static Component playerRenamed(String previous, String current, UUID uuid) {
+        return gray(
+            "haveiplayedwith.observe.renamed",
+            clickableName(previous, PAST_NAME, false, uuid),
+            clickableName(current, NAME, false, uuid)
+        );
+    }
+
     public static Component unknownAccount(String name) {
         return gray("haveiplayedwith.query.unknown_account", clickableName(name, UNKNOWN, true, null));
     }

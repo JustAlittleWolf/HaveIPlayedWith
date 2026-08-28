@@ -132,13 +132,15 @@ class PlayerDatabaseTest {
         try (PlayerDatabase database = new PlayerDatabase(temp.resolve("players.mv"))) {
             UUID uuid = UUID.fromString("61699b2e-d327-4a01-9f1e-0ea8c3f06bc6");
             database.putMojangNameCache("steve", new MojangNameCache(uuid, "Steve", Instant.parse("2026-08-01T00:00:00Z")));
-            database.putMojangNameCache("nobody", new MojangNameCache(null, null, Instant.parse("2026-08-01T00:00:00Z")));
+            database.putMojangNameCache("nobody", new MojangNameCache(null, "", Instant.parse("2026-08-01T00:00:00Z")));
         }
         try (PlayerDatabase database = new PlayerDatabase(temp.resolve("players.mv"))) {
             MojangNameCache steve = database.mojangNameCache("steve").orElseThrow();
             assertEquals(UUID.fromString("61699b2e-d327-4a01-9f1e-0ea8c3f06bc6"), steve.uuid());
             assertEquals("Steve", steve.username());
-            assertNull(database.mojangNameCache("nobody").orElseThrow().uuid());
+            MojangNameCache nobody = database.mojangNameCache("nobody").orElseThrow();
+            assertNull(nobody.uuid());
+            assertNull(nobody.username());
         }
     }
 
@@ -181,15 +183,45 @@ class PlayerDatabaseTest {
     }
 
     @Test
-    void playerRowWithoutNoteTimestampStillLoads() {
-        StoreRows.PlayerRow row = new com.google.gson.Gson().fromJson(
-            "{\"currentUsername\":\"Alex\",\"note\":\"hi\",\"totalMinutes\":1,\"sessionCount\":1}",
-            StoreRows.PlayerRow.class
-        );
+    void storedPlayerRowsDoNotUseNulls() {
+        StoreRows.PlayerRow row = new StoreRows.PlayerRow("Alex", null, 0, 1, 1);
         assertEquals("Alex", row.currentUsername());
-        assertEquals("hi", row.note());
-        assertNull(row.noteTakenAt());
-        assertEquals(1, row.totalMinutes());
+        assertEquals("", row.note());
+        assertEquals(0L, row.noteTakenAt());
+        String json = new com.google.gson.Gson().toJson(row);
+        assertFalse(json.contains("null"));
+        StoreRows.PlayerRow parsed = new com.google.gson.Gson().fromJson(json, StoreRows.PlayerRow.class);
+        assertEquals("", parsed.note());
+        assertEquals(0L, parsed.noteTakenAt());
+    }
+
+    @Test
+    void livePlayReportsPreviousSeenNameOnRename() {
+        try (PlayerDatabase database = new PlayerDatabase(temp.resolve("players.mv"))) {
+            UUID uuid = UUID.randomUUID();
+            assertTrue(database.recordLivePlay(uuid, "Steve", LocalDate.of(2026, 8, 1), "live:one", "hypixel.net").isEmpty());
+            assertEquals("Steve", database.recordLivePlay(uuid, "Alex", LocalDate.of(2026, 8, 2), "live:two", "hypixel.net").orElseThrow());
+            assertTrue(database.recordLivePlay(uuid, "Alex", LocalDate.of(2026, 8, 2), "live:two", "hypixel.net").isEmpty());
+            assertTrue(database.recordLivePlay(uuid, "alex", LocalDate.of(2026, 8, 2), "live:two", "hypixel.net").isEmpty());
+        }
+    }
+
+    @Test
+    void importedPlayersAnnounceWhenFirstSeenLiveUnderANewName() {
+        try (PlayerDatabase database = new PlayerDatabase(temp.resolve("players.mv"))) {
+            UUID uuid = UUID.randomUUID();
+            database.recordImportedSighting(uuid, "OldName", "Current", LocalDate.of(2026, 1, 1), "atl:file:a", Instant.parse("2026-01-01T12:00:00Z"));
+            assertEquals("OldName", database.recordLivePlay(uuid, "Current", LocalDate.of(2026, 8, 1), "live:one", "hypixel.net").orElseThrow());
+        }
+    }
+
+    @Test
+    void notesAloneDoNotCountAsAPreviouslySeenName() {
+        try (PlayerDatabase database = new PlayerDatabase(temp.resolve("players.mv"))) {
+            UUID uuid = UUID.randomUUID();
+            database.setNote(uuid, "Ghost", "met them on Discord");
+            assertTrue(database.recordLivePlay(uuid, "Steve", LocalDate.of(2026, 8, 1), "live:one", "hypixel.net").isEmpty());
+        }
     }
 
     @Test

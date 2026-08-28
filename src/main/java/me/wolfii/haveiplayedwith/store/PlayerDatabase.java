@@ -59,8 +59,8 @@ public final class PlayerDatabase implements AutoCloseable {
         }
     }
 
-    private static String blankToNull(String note) {
-        return note == null || note.isBlank() ? null : note;
+    private static String blankToEmpty(String note) {
+        return note == null || note.isBlank() ? "" : note;
     }
 
     public <T> T call(Callable<T> task) {
@@ -83,20 +83,25 @@ public final class PlayerDatabase implements AutoCloseable {
         run(() -> {
             ensurePlayerRow(uuid, username);
             StoreRows.PlayerRow row = playerRow(uuid);
-            String cleaned = blankToNull(note);
-            Long takenAt = cleaned == null ? null : Instant.now().toEpochMilli();
+            String cleaned = blankToEmpty(note);
+            long takenAt = cleaned.isEmpty() ? 0L : Instant.now().toEpochMilli();
             putPlayer(uuid, row.withNote(cleaned, takenAt));
         });
     }
 
-    public void recordLivePlay(UUID uuid, String username, LocalDate day, String sessionId, String serverId) {
-        run(() -> {
+    /**
+     * @return the last name this player was seen as, when the new username is different
+     */
+    public Optional<String> recordLivePlay(UUID uuid, String username, LocalDate day, String sessionId, String serverId) {
+        return call(() -> {
+            Optional<String> previousName = previousSeenNameIfDifferent(uuid, username);
             Instant now = Instant.now();
             ensurePlayerRow(uuid, username);
             touchUsername(uuid, username, now);
             setCurrentUsername(uuid, username);
             addSession(uuid, sessionId);
             addMinute(uuid, day, serverId);
+            return previousName;
         });
     }
 
@@ -117,13 +122,15 @@ public final class PlayerDatabase implements AutoCloseable {
         });
     }
 
-    public void applyMojangUsername(UUID uuid, String username, Instant fetchedAt) {
-        run(() -> {
+    public Optional<String> applyMojangUsername(UUID uuid, String username, Instant fetchedAt) {
+        return call(() -> {
             if (playerRow(uuid) == null) {
-                return;
+                return Optional.empty();
             }
+            Optional<String> previousName = previousSeenNameIfDifferent(uuid, username);
             touchUsername(uuid, username, fetchedAt);
             setCurrentUsername(uuid, username);
+            return previousName;
         });
     }
 
@@ -139,7 +146,10 @@ public final class PlayerDatabase implements AutoCloseable {
     }
 
     public void putMojangCache(UUID uuid, String username, Instant fetchedAt) {
-        run(() -> mojangUuid.put(StoreKeys.uuid(uuid), GSON.toJson(new StoreRows.InstantRow(username, fetchedAt.toEpochMilli()))));
+        run(() -> mojangUuid.put(StoreKeys.uuid(uuid), GSON.toJson(new StoreRows.InstantRow(
+            username == null ? "" : username,
+            fetchedAt.toEpochMilli()
+        ))));
     }
 
     public Optional<MojangNameCache> mojangNameCache(String usernameLower) {
@@ -149,15 +159,16 @@ public final class PlayerDatabase implements AutoCloseable {
                 return Optional.empty();
             }
             StoreRows.NameCacheRow row = GSON.fromJson(raw, StoreRows.NameCacheRow.class);
-            UUID uuid = row.uuid() == null ? null : UUID.fromString(row.uuid());
-            return Optional.of(new MojangNameCache(uuid, row.username(), Instant.ofEpochMilli(row.fetchedAt())));
+            UUID uuid = row.uuid().isBlank() ? null : UUID.fromString(row.uuid());
+            String username = row.username().isBlank() ? null : row.username();
+            return Optional.of(new MojangNameCache(uuid, username, Instant.ofEpochMilli(row.fetchedAt())));
         });
     }
 
     public void putMojangNameCache(String usernameLower, MojangNameCache cache) {
         run(() -> mojangName.put(usernameLower, GSON.toJson(new StoreRows.NameCacheRow(
-            cache.uuid() == null ? null : cache.uuid().toString(),
-            cache.username(),
+            cache.uuid() == null ? "" : cache.uuid().toString(),
+            cache.username() == null ? "" : cache.username(),
             cache.fetchedAt().toEpochMilli()
         ))));
     }
@@ -181,9 +192,9 @@ public final class PlayerDatabase implements AutoCloseable {
 
     public void putCraftyCache(String usernameLower, CraftyCache cache) {
         run(() -> crafty.put(usernameLower, GSON.toJson(new StoreRows.CraftyRow(
-            cache.uuid(),
-            cache.currentUsername(),
-            cache.usernamesJson(),
+            cache.uuid() == null ? "" : cache.uuid(),
+            cache.currentUsername() == null ? "" : cache.currentUsername(),
+            cache.usernamesJson() == null || cache.usernamesJson().isBlank() ? "[]" : cache.usernamesJson(),
             cache.valid(),
             cache.fetchedAt().toEpochMilli()
         ))));
@@ -200,7 +211,7 @@ public final class PlayerDatabase implements AutoCloseable {
                 source,
                 row.processed(),
                 row.total(),
-                row.lastTimestamp() == null ? null : LocalDateTime.parse(row.lastTimestamp()),
+                row.lastTimestamp().isBlank() ? null : LocalDateTime.parse(row.lastTimestamp()),
                 row.skip(),
                 row.status(),
                 row.silenced()
@@ -212,7 +223,7 @@ public final class PlayerDatabase implements AutoCloseable {
         run(() -> imports.put(progress.source(), GSON.toJson(new StoreRows.ImportRow(
             progress.processed(),
             progress.total(),
-            progress.lastTimestamp() == null ? null : progress.lastTimestamp().toString(),
+            progress.lastTimestamp() == null ? "" : progress.lastTimestamp().toString(),
             progress.skip(),
             progress.status(),
             progress.silenced()
@@ -241,19 +252,9 @@ public final class PlayerDatabase implements AutoCloseable {
         if (row == null) {
             return Optional.empty();
         }
-        List<SeenName> names = new ArrayList<>();
-        String prefix = StoreKeys.prefix(uuid);
-        Iterator<String> keys = history.keyIterator(prefix);
-        while (keys.hasNext()) {
-            String key = keys.next();
-            if (!key.startsWith(prefix)) {
-                break;
-            }
-            StoreRows.HistoryRow seen = GSON.fromJson(history.get(key), StoreRows.HistoryRow.class);
-            names.add(new SeenName(seen.username(), Instant.ofEpochMilli(seen.lastSeen())));
-        }
-        names.sort(Comparator.comparing(SeenName::lastSeen).reversed());
+        List<SeenName> names = loadHistory(uuid);
         List<ServerPlay> servers = new ArrayList<>();
+        String prefix = StoreKeys.prefix(uuid);
         Iterator<String> serverKeys = playServers.keyIterator(prefix);
         while (serverKeys.hasNext()) {
             String key = serverKeys.next();
@@ -263,11 +264,10 @@ public final class PlayerDatabase implements AutoCloseable {
             servers.add(new ServerPlay(key.substring(prefix.length()), Long.parseLong(playServers.get(key))));
         }
         servers.sort(Comparator.comparingLong(ServerPlay::minutes).reversed().thenComparing(ServerPlay::serverId));
-        Optional<Instant> noteTakenAt = Optional.ofNullable(row.noteTakenAt()).map(Instant::ofEpochMilli);
-        Optional<String> note = Optional.ofNullable(row.note()).filter(value -> !value.isBlank());
-        if (note.isEmpty()) {
-            noteTakenAt = Optional.empty();
-        }
+        Optional<String> note = Optional.of(row.note()).filter(value -> !value.isBlank());
+        Optional<Instant> noteTakenAt = note.isEmpty() || row.noteTakenAt() == 0L
+            ? Optional.empty()
+            : Optional.of(Instant.ofEpochMilli(row.noteTakenAt()));
         return Optional.of(new PlayerSnapshot(
             uuid,
             row.currentUsername(),
@@ -280,6 +280,37 @@ public final class PlayerDatabase implements AutoCloseable {
             names,
             servers
         ));
+    }
+
+    private List<SeenName> loadHistory(UUID uuid) {
+        List<SeenName> names = new ArrayList<>();
+        String prefix = StoreKeys.prefix(uuid);
+        Iterator<String> keys = history.keyIterator(prefix);
+        while (keys.hasNext()) {
+            String key = keys.next();
+            if (!key.startsWith(prefix)) {
+                break;
+            }
+            StoreRows.HistoryRow seen = GSON.fromJson(history.get(key), StoreRows.HistoryRow.class);
+            names.add(new SeenName(seen.username(), Instant.ofEpochMilli(seen.lastSeen())));
+        }
+        names.sort(Comparator.comparing(SeenName::lastSeen).reversed());
+        return names;
+    }
+
+    private Optional<String> previousSeenNameIfDifferent(UUID uuid, String username) {
+        String latest = null;
+        Instant latestAt = null;
+        for (SeenName seen : loadHistory(uuid)) {
+            if (latestAt == null || seen.lastSeen().isAfter(latestAt)) {
+                latest = seen.username();
+                latestAt = seen.lastSeen();
+            }
+        }
+        if (latest == null || latest.equalsIgnoreCase(username)) {
+            return Optional.empty();
+        }
+        return Optional.of(latest);
     }
 
     private Optional<LocalDate> lastPlayedBefore(String prefix, LocalDate excluded) {
@@ -314,7 +345,7 @@ public final class PlayerDatabase implements AutoCloseable {
         if (playerRow(uuid) != null) {
             return;
         }
-        putPlayer(uuid, new StoreRows.PlayerRow(username, null, null, 0, 0));
+        putPlayer(uuid, new StoreRows.PlayerRow(username, "", 0L, 0, 0));
         indexName(uuid, username);
     }
 

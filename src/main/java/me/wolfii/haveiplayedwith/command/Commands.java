@@ -36,17 +36,15 @@ public final class Commands {
 
     private void register(CommandDispatcher<FabricClientCommandSource> dispatcher) {
         dispatcher.register(ClientCommands.literal("haveiplayedwith")
-            .then(ClientCommands.argument("player", ClientEntityArgument.players())
+            .then(ClientCommands.argument("player", ClientEntityArgument.player())
                 .executes(context -> {
-                    List<PlayerArguments.ResolvedPlayer> targets = PlayerArguments.resolvePlayers(context, "player");
-                    if (targets.isEmpty()) {
+                    PlayerArguments.ResolvedPlayer target = PlayerArguments.resolvePlayer(context, "player");
+                    if (target == null) {
                         CommandFeedback.tell(context.getSource(), QueryMessages.noMatchingPlayers());
                         return 0;
                     }
-                    for (PlayerArguments.ResolvedPlayer target : targets) {
-                        lookup.query(context.getSource(), target);
-                    }
-                    return targets.size();
+                    lookup.query(context.getSource(), target);
+                    return 1;
                 })));
         dispatcher.register(ClientCommands.literal("playernote")
             .then(ClientCommands.literal("confirm")

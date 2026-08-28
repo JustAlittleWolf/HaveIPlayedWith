@@ -41,7 +41,7 @@ public final class CraftyClient {
         if (!cache.valid()) {
             return Optional.of(invalid());
         }
-        if (cache.uuid() == null) {
+        if (cache.uuid() == null || cache.uuid().isBlank()) {
             return Optional.of(invalid());
         }
         return Optional.of(new Player(
@@ -203,8 +203,8 @@ public final class CraftyClient {
 
     private void store(String key, Player player) {
         database.putCraftyCache(key, new CraftyCache(
-            player.uuid() == null ? null : player.uuid().toString(),
-            player.currentUsername(),
+            player.uuid() == null ? "" : player.uuid().toString(),
+            player.currentUsername() == null ? "" : player.currentUsername(),
             historyJson(player.history()),
             player.valid(),
             Instant.now()
