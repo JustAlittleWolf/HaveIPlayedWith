@@ -14,35 +14,43 @@ import net.minecraft.client.player.LocalPlayer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.time.Instant;
 import java.time.LocalDate;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
 
 /**
  * Watches the tab list and nearby players every tick so joins and name changes are noticed
  * immediately. Each player is only processed once per calendar minute (cached by UUID + name).
+ *
+ * <p>The client thread only reads game profiles and hands them to {@link #sightings}; every cache
+ * read, API call and database write happens on one of this class' own threads.
  */
 public final class PlayerObserver {
 	private static final Logger LOGGER = LoggerFactory.getLogger("haveiplayedwith");
-	private static final int MAX_BUFFER = 250;
+	/** Sightings waiting on a Mojang lookup, per the 250 entry buffer the API budget allows. */
+	private static final int MAX_LOOKUP_BUFFER = 250;
+	/** Sightings waiting to be classified as "needs a lookup" or "already known". */
+	private static final int MAX_SIGHTING_BUFFER = 2048;
+	private static final long CREDIT_MEMORY_MINUTES = 60;
 
 	private record Sighting(UUID uuid, String username, LocalDate day, long epochMinute, String sessionId) {
 	}
 
 	private final PlayerDatabase database;
 	private final MojangClient mojang;
-	private final ExecutorService worker = Executors.newSingleThreadExecutor(runnable -> {
-		Thread thread = new Thread(runnable, "haveiplayedwith-observe");
-		thread.setDaemon(true);
-		return thread;
-	});
-	private final ConcurrentHashMap<UUID, Sighting> pending = new ConcurrentHashMap<>();
-	private final ArrayBlockingQueue<UUID> queue = new ArrayBlockingQueue<>(MAX_BUFFER);
+	private final ExecutorService dispatcher = Executors.newSingleThreadExecutor(named("haveiplayedwith-sightings"));
+	private final ExecutorService lookupWorker = Executors.newSingleThreadExecutor(named("haveiplayedwith-mojang"));
+	private final BlockingQueue<Sighting> sightings = new ArrayBlockingQueue<>(MAX_SIGHTING_BUFFER);
+	private final ConcurrentHashMap<UUID, Sighting> pendingLookups = new ConcurrentHashMap<>();
+	private final BlockingQueue<UUID> lookups = new ArrayBlockingQueue<>(MAX_LOOKUP_BUFFER);
 	private final ConcurrentHashMap<UUID, Long> creditedMinute = new ConcurrentHashMap<>();
 	private final ConcurrentHashMap<UUID, String> noticedThisMinute = new ConcurrentHashMap<>();
 	private volatile long currentMinute = Long.MIN_VALUE;
@@ -51,7 +59,8 @@ public final class PlayerObserver {
 	public PlayerObserver(PlayerDatabase database, MojangClient mojang) {
 		this.database = database;
 		this.mojang = mojang;
-		worker.execute(this::processLoop);
+		dispatcher.execute(this::dispatchLoop);
+		lookupWorker.execute(this::lookupLoop);
 	}
 
 	public void register() {
@@ -66,7 +75,8 @@ public final class PlayerObserver {
 	}
 
 	public void close() {
-		worker.shutdownNow();
+		dispatcher.shutdownNow();
+		lookupWorker.shutdownNow();
 	}
 
 	private void tick(Minecraft client) {
@@ -77,13 +87,14 @@ public final class PlayerObserver {
 		if (epochMinute != currentMinute) {
 			currentMinute = epochMinute;
 			noticedThisMinute.clear();
+			creditedMinute.values().removeIf(minute -> minute < epochMinute - CREDIT_MEMORY_MINUTES);
 		}
-		String session = sessionId == null ? "live" : sessionId;
+		String session = session();
 		LocalDate day = LocalDate.now();
 		Set<UUID> seen = new HashSet<>();
 		ClientPacketListener connection = client.getConnection();
 		for (PlayerInfo info : connection.getListedOnlinePlayers()) {
-			offer(profile(info), day, epochMinute, session, seen);
+			offer(info.getProfile(), day, epochMinute, session, seen);
 		}
 		for (AbstractClientPlayer player : client.level.players()) {
 			offer(player.getGameProfile(), day, epochMinute, session, seen);
@@ -92,12 +103,22 @@ public final class PlayerObserver {
 		offer(self.getGameProfile(), day, epochMinute, session, seen);
 	}
 
+	private String session() {
+		String current = sessionId;
+		if (current != null) {
+			return current;
+		}
+		String fresh = UUID.randomUUID().toString();
+		sessionId = fresh;
+		return fresh;
+	}
+
 	private void offer(GameProfile profile, LocalDate day, long epochMinute, String session, Set<UUID> seen) {
 		if (profile == null) {
 			return;
 		}
-		UUID uuid = profileId(profile);
-		String name = profileName(profile);
+		UUID uuid = profile.id();
+		String name = profile.name();
 		if (uuid == null || !MinecraftUsernames.isValid(name)) {
 			return;
 		}
@@ -108,36 +129,27 @@ public final class PlayerObserver {
 			return;
 		}
 		noticedThisMinute.put(uuid, name);
-		if (mojang.isFreshMismatch(uuid, name)) {
-			return;
-		}
-		if (!mojang.needsFetch(uuid, name)) {
-			credit(new Sighting(uuid, name, day, epochMinute, session));
-			return;
-		}
-		Sighting sighting = new Sighting(uuid, name, day, epochMinute, session);
-		Sighting previous = pending.put(uuid, sighting);
-		if (previous == null && !queue.offer(uuid)) {
-			pending.remove(uuid, sighting);
+		if (!sightings.offer(new Sighting(uuid, name, day, epochMinute, session))) {
+			noticedThisMinute.remove(uuid, name);
 		}
 	}
 
-	private void processLoop() {
+	/** Decides off the client thread whether a sighting can be credited from cache or needs the API. */
+	private void dispatchLoop() {
 		while (!Thread.currentThread().isInterrupted()) {
 			try {
-				UUID uuid = queue.take();
-				Sighting sighting = pending.remove(uuid);
-				if (sighting == null) {
+				Sighting sighting = sightings.take();
+				if (mojang.isFreshMismatch(sighting.uuid(), sighting.username())) {
 					continue;
 				}
-				var profile = mojang.lookupUuid(uuid);
-				if (profile.isEmpty() || !profile.get().username().equalsIgnoreCase(sighting.username())) {
+				if (!mojang.needsFetch(sighting.uuid(), sighting.username())) {
+					credit(sighting);
 					continue;
 				}
-				if (!profile.get().username().equals(sighting.username())) {
-					database.applyMojangUsername(uuid, profile.get().username(), java.time.Instant.now());
+				Sighting previous = pendingLookups.put(sighting.uuid(), sighting);
+				if (previous == null && !lookups.offer(sighting.uuid())) {
+					pendingLookups.remove(sighting.uuid(), sighting);
 				}
-				credit(new Sighting(uuid, profile.get().username(), sighting.day(), sighting.epochMinute(), sighting.sessionId()));
 			} catch (InterruptedException e) {
 				Thread.currentThread().interrupt();
 				return;
@@ -147,24 +159,45 @@ public final class PlayerObserver {
 		}
 	}
 
+	private void lookupLoop() {
+		while (!Thread.currentThread().isInterrupted()) {
+			try {
+				UUID uuid = lookups.take();
+				Sighting sighting = pendingLookups.remove(uuid);
+				if (sighting == null) {
+					continue;
+				}
+				var profile = mojang.lookupUuid(uuid);
+				if (profile.isEmpty() || !profile.get().username().equalsIgnoreCase(sighting.username())) {
+					continue;
+				}
+				if (!profile.get().username().equals(sighting.username())) {
+					database.applyMojangUsername(uuid, profile.get().username(), Instant.now());
+				}
+				credit(new Sighting(uuid, profile.get().username(), sighting.day(), sighting.epochMinute(), sighting.sessionId()));
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+				return;
+			} catch (RuntimeException e) {
+				LOGGER.debug("Mojang verification failed", e);
+			}
+		}
+	}
+
 	private void credit(Sighting sighting) {
 		Long last = creditedMinute.put(sighting.uuid(), sighting.epochMinute());
 		if (last != null && last == sighting.epochMinute()) {
-			database.applyMojangUsername(sighting.uuid(), sighting.username(), java.time.Instant.now());
+			database.applyMojangUsername(sighting.uuid(), sighting.username(), Instant.now());
 			return;
 		}
 		database.recordLivePlay(sighting.uuid(), sighting.username(), sighting.day(), "live:" + sighting.sessionId());
 	}
 
-	private static UUID profileId(GameProfile profile) {
-		return profile.id();
-	}
-
-	private static String profileName(GameProfile profile) {
-		return profile.name();
-	}
-
-	private static GameProfile profile(PlayerInfo info) {
-		return info.getProfile();
+	private static ThreadFactory named(String name) {
+		return runnable -> {
+			Thread thread = new Thread(runnable, name);
+			thread.setDaemon(true);
+			return thread;
+		};
 	}
 }
