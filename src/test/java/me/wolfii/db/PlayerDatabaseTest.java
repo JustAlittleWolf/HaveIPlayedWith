@@ -10,6 +10,8 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class PlayerDatabaseTest {
@@ -18,7 +20,7 @@ class PlayerDatabaseTest {
 
 	@Test
 	void recordsPlayAndFindsPastNames() {
-		try (PlayerDatabase database = new PlayerDatabase(temp.resolve("players.sqlite"))) {
+		try (PlayerDatabase database = new PlayerDatabase(temp.resolve("players.mv"))) {
 			UUID uuid = UUID.fromString("61699b2e-d327-4a01-9f1e-0ea8c3f06bc6");
 			database.recordLivePlay(uuid, "Steve", LocalDate.of(2026, 8, 1), "live:one");
 			database.recordLivePlay(uuid, "Steve", LocalDate.of(2026, 8, 1), "live:one");
@@ -39,7 +41,7 @@ class PlayerDatabaseTest {
 
 	@Test
 	void importDoesNotAddMinutes() {
-		try (PlayerDatabase database = new PlayerDatabase(temp.resolve("players.sqlite"))) {
+		try (PlayerDatabase database = new PlayerDatabase(temp.resolve("players.mv"))) {
 			UUID uuid = UUID.randomUUID();
 			database.recordImportedSighting(uuid, "OldName", "Current", LocalDate.of(2026, 1, 1), "atl:file:a", Instant.parse("2026-01-01T12:00:00Z"));
 			PlayerSnapshot snapshot = database.get(uuid).orElseThrow();
@@ -52,7 +54,7 @@ class PlayerDatabaseTest {
 
 	@Test
 	void importOnlyRecordsTheNameThatWasSeen() {
-		try (PlayerDatabase database = new PlayerDatabase(temp.resolve("players.sqlite"))) {
+		try (PlayerDatabase database = new PlayerDatabase(temp.resolve("players.mv"))) {
 			UUID uuid = UUID.randomUUID();
 			database.recordImportedSighting(uuid, "OldName", "Current", LocalDate.of(2026, 1, 1), "atl:file:a", Instant.parse("2026-01-01T12:00:00Z"));
 			List<String> seen = database.get(uuid).orElseThrow().names().stream().map(SeenName::username).toList();
@@ -62,7 +64,7 @@ class PlayerDatabaseTest {
 
 	@Test
 	void notesDoNotCountAsHavingPlayedTogether() {
-		try (PlayerDatabase database = new PlayerDatabase(temp.resolve("players.sqlite"))) {
+		try (PlayerDatabase database = new PlayerDatabase(temp.resolve("players.mv"))) {
 			UUID uuid = UUID.randomUUID();
 			database.setNote(uuid, "Ghost", "met them on Discord");
 			PlayerSnapshot snapshot = database.get(uuid).orElseThrow();
@@ -70,6 +72,39 @@ class PlayerDatabaseTest {
 			assertEquals(0, snapshot.daysPlayed());
 			assertEquals(0, snapshot.sessionCount());
 			assertTrue(snapshot.names().isEmpty());
+			assertTrue(snapshot.note().isPresent());
+			assertFalse(snapshot.hasPlayed());
+			assertEquals(1, database.findByName("ghost").size());
+		}
+	}
+
+	@Test
+	void persistsMojangNameLookups() {
+		try (PlayerDatabase database = new PlayerDatabase(temp.resolve("players.mv"))) {
+			UUID uuid = UUID.fromString("61699b2e-d327-4a01-9f1e-0ea8c3f06bc6");
+			database.putMojangNameCache("steve", new PlayerDatabase.MojangNameCache(uuid, "Steve", Instant.parse("2026-08-01T00:00:00Z")));
+			database.putMojangNameCache("nobody", new PlayerDatabase.MojangNameCache(null, null, Instant.parse("2026-08-01T00:00:00Z")));
+		}
+		try (PlayerDatabase database = new PlayerDatabase(temp.resolve("players.mv"))) {
+			PlayerDatabase.MojangNameCache steve = database.mojangNameCache("steve").orElseThrow();
+			assertEquals(UUID.fromString("61699b2e-d327-4a01-9f1e-0ea8c3f06bc6"), steve.uuid());
+			assertEquals("Steve", steve.username());
+			assertNull(database.mojangNameCache("nobody").orElseThrow().uuid());
+		}
+	}
+
+	@Test
+	void importProgressKeepsSilenceAcrossReopen() {
+		try (PlayerDatabase database = new PlayerDatabase(temp.resolve("players.mv"))) {
+			database.saveImportProgress(new ImportProgress(
+				ImportProgress.SOURCE_ALLTHELOGS, 12, 100, null, 0, ImportProgress.STATUS_RUNNING, true
+			));
+		}
+		try (PlayerDatabase database = new PlayerDatabase(temp.resolve("players.mv"))) {
+			ImportProgress progress = database.importProgress(ImportProgress.SOURCE_ALLTHELOGS).orElseThrow();
+			assertEquals(12, progress.processed());
+			assertTrue(progress.silenced());
+			assertEquals(ImportProgress.STATUS_RUNNING, progress.status());
 		}
 	}
 }

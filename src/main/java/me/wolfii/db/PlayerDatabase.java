@@ -1,22 +1,21 @@
 package me.wolfii.db;
 
+import com.google.gson.Gson;
+import org.h2.mvstore.MVMap;
+import org.h2.mvstore.MVStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.sql.Connection;
-import java.sql.DriverManager;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-import java.sql.SQLException;
-import java.sql.Statement;
-import java.sql.Types;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.Iterator;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.Callable;
@@ -26,16 +25,38 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 /**
- * SQLite store for players you've been around. Each API call is one SQL transaction;
- * WAL + {@code synchronous=NORMAL} lets SQLite batch the actual disk writes instead of
- * the application holding an uncommitted transaction.
+ * Single-file store for players you've been around, backed by H2 MVStore (pure Java, ~350 KB).
+ * Each logical write is committed from the database thread, not the client thread.
  */
 public final class PlayerDatabase implements AutoCloseable {
 	private static final Logger LOGGER = LoggerFactory.getLogger("haveiplayedwith");
+	private static final Gson GSON = new Gson();
+
 	public record MojangCache(String username, Instant fetchedAt) {
 	}
 
+	public record MojangNameCache(UUID uuid, String username, Instant fetchedAt) {
+	}
+
 	public record CraftyCache(String uuid, String currentUsername, String usernamesJson, boolean valid, Instant fetchedAt) {
+	}
+
+	private record PlayerRow(String currentUsername, String note, long totalMinutes, int sessionCount) {
+	}
+
+	private record HistoryRow(String username, long lastSeen) {
+	}
+
+	private record InstantRow(String username, long fetchedAt) {
+	}
+
+	private record NameCacheRow(String uuid, String username, long fetchedAt) {
+	}
+
+	private record CraftyRow(String uuid, String currentUsername, String usernamesJson, boolean valid, long fetchedAt) {
+	}
+
+	private record ImportRow(long processed, long total, String lastTimestamp, long skip, String status, boolean silenced) {
 	}
 
 	private final ExecutorService worker = Executors.newSingleThreadExecutor(runnable -> {
@@ -43,22 +64,34 @@ public final class PlayerDatabase implements AutoCloseable {
 		thread.setDaemon(true);
 		return thread;
 	});
-	private final Connection connection;
+	private final MVStore store;
+	private final MVMap<String, String> players;
+	private final MVMap<String, String> history;
+	private final MVMap<String, String> nameIndex;
+	private final MVMap<String, String> playDays;
+	private final MVMap<String, String> playSessions;
+	private final MVMap<String, String> mojangUuid;
+	private final MVMap<String, String> mojangName;
+	private final MVMap<String, String> crafty;
+	private final MVMap<String, String> imports;
 
 	public PlayerDatabase(Path file) {
 		try {
 			Files.createDirectories(file.getParent());
-			Class.forName("org.sqlite.JDBC");
-			this.connection = DriverManager.getConnection("jdbc:sqlite:" + file.toAbsolutePath());
-			try (Statement statement = connection.createStatement()) {
-				statement.execute("PRAGMA journal_mode=WAL");
-				statement.execute("PRAGMA synchronous=NORMAL");
-				statement.execute("PRAGMA wal_autocheckpoint=1000");
-				statement.execute("PRAGMA foreign_keys=ON");
-			}
-			connection.setAutoCommit(false);
-			createSchema();
-			connection.commit();
+			this.store = new MVStore.Builder()
+				.fileName(file.toAbsolutePath().toString())
+				.compress()
+				.autoCommitDisabled()
+				.open();
+			this.players = store.openMap("players");
+			this.history = store.openMap("username_history");
+			this.nameIndex = store.openMap("name_index");
+			this.playDays = store.openMap("play_days");
+			this.playSessions = store.openMap("play_sessions");
+			this.mojangUuid = store.openMap("mojang_uuid");
+			this.mojangName = store.openMap("mojang_name");
+			this.crafty = store.openMap("crafty");
+			this.imports = store.openMap("import_progress");
 		} catch (Exception e) {
 			throw new IllegalStateException("Failed to open HaveIPlayedWith database at " + file, e);
 		}
@@ -69,13 +102,10 @@ public final class PlayerDatabase implements AutoCloseable {
 			return worker.submit(() -> {
 				try {
 					T result = task.call();
-					connection.commit();
+					store.commit();
 					return result;
 				} catch (Exception e) {
-					try {
-						connection.rollback();
-					} catch (SQLException ignored) {
-					}
+					store.rollback();
 					throw e;
 				}
 			}).get();
@@ -110,17 +140,8 @@ public final class PlayerDatabase implements AutoCloseable {
 	public void setNote(UUID uuid, String username, String note) {
 		run(() -> {
 			ensurePlayerRow(uuid, username);
-			try (PreparedStatement statement = connection.prepareStatement("UPDATE players SET note = ? WHERE uuid = ?")) {
-				if (note == null || note.isBlank()) {
-					statement.setNull(1, Types.VARCHAR);
-				} else {
-					statement.setString(1, note);
-				}
-				statement.setString(2, uuid.toString());
-				statement.executeUpdate();
-			} catch (SQLException e) {
-				throw new IllegalStateException(e);
-			}
+			PlayerRow row = playerRow(uuid);
+			putPlayer(uuid, new PlayerRow(row.currentUsername(), blankToNull(note), row.totalMinutes(), row.sessionCount()));
 		});
 	}
 
@@ -154,7 +175,7 @@ public final class PlayerDatabase implements AutoCloseable {
 
 	public void applyMojangUsername(UUID uuid, String username, Instant fetchedAt) {
 		run(() -> {
-			if (!existsOnThread(uuid)) {
+			if (playerRow(uuid) == null) {
 				return;
 			}
 			touchUsername(uuid, username, fetchedAt);
@@ -164,360 +185,245 @@ public final class PlayerDatabase implements AutoCloseable {
 
 	public Optional<MojangCache> mojangCache(UUID uuid) {
 		return call(() -> {
-			try (PreparedStatement statement = connection.prepareStatement(
-				"SELECT username, fetched_at FROM mojang_cache WHERE uuid = ?")) {
-				statement.setString(1, uuid.toString());
-				try (ResultSet rs = statement.executeQuery()) {
-					if (!rs.next()) {
-						return Optional.empty();
-					}
-					String username = rs.getString("username");
-					return Optional.of(new MojangCache(username, Instant.ofEpochMilli(rs.getLong("fetched_at"))));
-				}
+			String raw = mojangUuid.get(uuid.toString());
+			if (raw == null) {
+				return Optional.empty();
 			}
+			InstantRow row = GSON.fromJson(raw, InstantRow.class);
+			return Optional.of(new MojangCache(row.username(), Instant.ofEpochMilli(row.fetchedAt())));
 		});
 	}
 
 	public void putMojangCache(UUID uuid, String username, Instant fetchedAt) {
-		run(() -> {
-			try (PreparedStatement statement = connection.prepareStatement(
-				"INSERT INTO mojang_cache(uuid, username, fetched_at) VALUES(?, ?, ?) " +
-					"ON CONFLICT(uuid) DO UPDATE SET username = excluded.username, fetched_at = excluded.fetched_at")) {
-				statement.setString(1, uuid.toString());
-				statement.setString(2, username);
-				statement.setLong(3, fetchedAt.toEpochMilli());
-				statement.executeUpdate();
-			} catch (SQLException e) {
-				throw new IllegalStateException(e);
+		run(() -> mojangUuid.put(uuid.toString(), GSON.toJson(new InstantRow(username, fetchedAt.toEpochMilli()))));
+	}
+
+	public Optional<MojangNameCache> mojangNameCache(String usernameLower) {
+		return call(() -> {
+			String raw = mojangName.get(usernameLower);
+			if (raw == null) {
+				return Optional.empty();
 			}
+			NameCacheRow row = GSON.fromJson(raw, NameCacheRow.class);
+			UUID uuid = row.uuid() == null ? null : UUID.fromString(row.uuid());
+			return Optional.of(new MojangNameCache(uuid, row.username(), Instant.ofEpochMilli(row.fetchedAt())));
 		});
+	}
+
+	public void putMojangNameCache(String usernameLower, MojangNameCache cache) {
+		run(() -> mojangName.put(usernameLower, GSON.toJson(new NameCacheRow(
+			cache.uuid() == null ? null : cache.uuid().toString(),
+			cache.username(),
+			cache.fetchedAt().toEpochMilli()
+		))));
 	}
 
 	public Optional<CraftyCache> craftyCache(String usernameLower) {
 		return call(() -> {
-			try (PreparedStatement statement = connection.prepareStatement(
-				"SELECT uuid, current_username, usernames_json, valid, fetched_at FROM crafty_cache WHERE username_lower = ?")) {
-				statement.setString(1, usernameLower);
-				try (ResultSet rs = statement.executeQuery()) {
-					if (!rs.next()) {
-						return Optional.empty();
-					}
-					return Optional.of(new CraftyCache(
-						rs.getString("uuid"),
-						rs.getString("current_username"),
-						rs.getString("usernames_json"),
-						rs.getInt("valid") != 0,
-						Instant.ofEpochMilli(rs.getLong("fetched_at"))
-					));
-				}
+			String raw = crafty.get(usernameLower);
+			if (raw == null) {
+				return Optional.empty();
 			}
+			CraftyRow row = GSON.fromJson(raw, CraftyRow.class);
+			return Optional.of(new CraftyCache(
+				row.uuid(),
+				row.currentUsername(),
+				row.usernamesJson(),
+				row.valid(),
+				Instant.ofEpochMilli(row.fetchedAt())
+			));
 		});
 	}
 
 	public void putCraftyCache(String usernameLower, CraftyCache cache) {
-		run(() -> {
-			try (PreparedStatement statement = connection.prepareStatement(
-				"INSERT INTO crafty_cache(username_lower, uuid, current_username, usernames_json, valid, fetched_at) " +
-					"VALUES(?, ?, ?, ?, ?, ?) ON CONFLICT(username_lower) DO UPDATE SET " +
-					"uuid = excluded.uuid, current_username = excluded.current_username, " +
-					"usernames_json = excluded.usernames_json, valid = excluded.valid, fetched_at = excluded.fetched_at")) {
-				statement.setString(1, usernameLower);
-				statement.setString(2, cache.uuid());
-				statement.setString(3, cache.currentUsername());
-				statement.setString(4, cache.usernamesJson());
-				statement.setInt(5, cache.valid() ? 1 : 0);
-				statement.setLong(6, cache.fetchedAt().toEpochMilli());
-				statement.executeUpdate();
-			} catch (SQLException e) {
-				throw new IllegalStateException(e);
-			}
-		});
+		run(() -> crafty.put(usernameLower, GSON.toJson(new CraftyRow(
+			cache.uuid(),
+			cache.currentUsername(),
+			cache.usernamesJson(),
+			cache.valid(),
+			cache.fetchedAt().toEpochMilli()
+		))));
 	}
 
 	public Optional<ImportProgress> importProgress(String source) {
 		return call(() -> {
-			try (PreparedStatement statement = connection.prepareStatement(
-				"SELECT processed, total, last_timestamp, skip_count, status FROM import_progress WHERE source = ?")) {
-				statement.setString(1, source);
-				try (ResultSet rs = statement.executeQuery()) {
-					if (!rs.next()) {
-						return Optional.empty();
-					}
-					String timestamp = rs.getString("last_timestamp");
-					return Optional.of(new ImportProgress(
-						source,
-						rs.getLong("processed"),
-						rs.getLong("total"),
-						timestamp == null ? null : LocalDateTime.parse(timestamp),
-						rs.getLong("skip_count"),
-						rs.getString("status")
-					));
-				}
+			String raw = imports.get(source);
+			if (raw == null) {
+				return Optional.empty();
 			}
+			ImportRow row = GSON.fromJson(raw, ImportRow.class);
+			return Optional.of(new ImportProgress(
+				source,
+				row.processed(),
+				row.total(),
+				row.lastTimestamp() == null ? null : LocalDateTime.parse(row.lastTimestamp()),
+				row.skip(),
+				row.status(),
+				row.silenced()
+			));
 		});
 	}
 
 	public void saveImportProgress(ImportProgress progress) {
-		run(() -> {
-			try (PreparedStatement statement = connection.prepareStatement(
-				"INSERT INTO import_progress(source, processed, total, last_timestamp, skip_count, status) " +
-					"VALUES(?, ?, ?, ?, ?, ?) ON CONFLICT(source) DO UPDATE SET " +
-					"processed = excluded.processed, total = excluded.total, last_timestamp = excluded.last_timestamp, " +
-					"skip_count = excluded.skip_count, status = excluded.status")) {
-				statement.setString(1, progress.source());
-				statement.setLong(2, progress.processed());
-				statement.setLong(3, progress.total());
-				if (progress.lastTimestamp() == null) {
-					statement.setNull(4, Types.VARCHAR);
-				} else {
-					statement.setString(4, progress.lastTimestamp().toString());
-				}
-				statement.setLong(5, progress.skip());
-				statement.setString(6, progress.status());
-				statement.executeUpdate();
-			} catch (SQLException e) {
-				throw new IllegalStateException(e);
-			}
-		});
+		run(() -> imports.put(progress.source(), GSON.toJson(new ImportRow(
+			progress.processed(),
+			progress.total(),
+			progress.lastTimestamp() == null ? null : progress.lastTimestamp().toString(),
+			progress.skip(),
+			progress.status(),
+			progress.silenced()
+		))));
 	}
 
 	@Override
 	public void close() {
 		try {
-			run(() -> {
-				try (Statement statement = connection.createStatement()) {
-					statement.execute("PRAGMA wal_checkpoint(TRUNCATE)");
-				}
-			});
+			run(store::commit);
 		} catch (RuntimeException e) {
-			LOGGER.warn("Failed to checkpoint HaveIPlayedWith database", e);
+			LOGGER.warn("Failed to commit HaveIPlayedWith database", e);
 		}
 		worker.shutdown();
 		try {
 			if (!worker.awaitTermination(5, TimeUnit.SECONDS)) {
 				worker.shutdownNow();
 			}
-			connection.close();
+			store.close();
 		} catch (InterruptedException e) {
 			Thread.currentThread().interrupt();
-		} catch (SQLException e) {
-			LOGGER.warn("Failed to close HaveIPlayedWith database", e);
+			store.closeImmediately();
 		}
 	}
 
-	private void createSchema() throws SQLException {
-		try (Statement statement = connection.createStatement()) {
-			statement.execute("""
-				CREATE TABLE IF NOT EXISTS players (
-					uuid TEXT PRIMARY KEY,
-					current_username TEXT NOT NULL,
-					note TEXT,
-					total_minutes INTEGER NOT NULL DEFAULT 0,
-					session_count INTEGER NOT NULL DEFAULT 0
-				)
-				""");
-			statement.execute("""
-				CREATE TABLE IF NOT EXISTS username_history (
-					uuid TEXT NOT NULL,
-					username TEXT NOT NULL,
-					last_seen INTEGER NOT NULL,
-					PRIMARY KEY (uuid, username COLLATE NOCASE)
-				)
-				""");
-			statement.execute("""
-				CREATE TABLE IF NOT EXISTS play_days (
-					uuid TEXT NOT NULL,
-					day TEXT NOT NULL,
-					minutes INTEGER NOT NULL DEFAULT 0,
-					PRIMARY KEY (uuid, day)
-				)
-				""");
-			statement.execute("""
-				CREATE TABLE IF NOT EXISTS play_sessions (
-					uuid TEXT NOT NULL,
-					session_id TEXT NOT NULL,
-					PRIMARY KEY (uuid, session_id)
-				)
-				""");
-			statement.execute("""
-				CREATE TABLE IF NOT EXISTS mojang_cache (
-					uuid TEXT PRIMARY KEY,
-					username TEXT,
-					fetched_at INTEGER NOT NULL
-				)
-				""");
-			statement.execute("""
-				CREATE TABLE IF NOT EXISTS crafty_cache (
-					username_lower TEXT PRIMARY KEY,
-					uuid TEXT,
-					current_username TEXT,
-					usernames_json TEXT,
-					valid INTEGER NOT NULL,
-					fetched_at INTEGER NOT NULL
-				)
-				""");
-			statement.execute("""
-				CREATE TABLE IF NOT EXISTS import_progress (
-					source TEXT PRIMARY KEY,
-					processed INTEGER NOT NULL,
-					total INTEGER NOT NULL,
-					last_timestamp TEXT,
-					skip_count INTEGER NOT NULL,
-					status TEXT NOT NULL
-				)
-				""");
-			statement.execute("CREATE INDEX IF NOT EXISTS idx_players_username ON players(current_username COLLATE NOCASE)");
-			statement.execute("CREATE INDEX IF NOT EXISTS idx_history_username ON username_history(username COLLATE NOCASE)");
-		}
-	}
-
-	private List<PlayerSnapshot> findByNameOnThread(String name) throws SQLException {
-		List<UUID> uuids = new ArrayList<>();
-		try (PreparedStatement statement = connection.prepareStatement("""
-			SELECT DISTINCT p.uuid FROM players p
-			LEFT JOIN username_history h ON h.uuid = p.uuid
-			WHERE p.current_username = ? COLLATE NOCASE
-			   OR h.username = ? COLLATE NOCASE
-			""")) {
-			statement.setString(1, name);
-			statement.setString(2, name);
-			try (ResultSet rs = statement.executeQuery()) {
-				while (rs.next()) {
-					uuids.add(UUID.fromString(rs.getString("uuid")));
-				}
-			}
+	private List<PlayerSnapshot> findByNameOnThread(String name) {
+		String raw = nameIndex.get(name.toLowerCase(Locale.ROOT));
+		if (raw == null) {
+			return List.of();
 		}
 		List<PlayerSnapshot> snapshots = new ArrayList<>();
-		for (UUID uuid : uuids) {
-			loadSnapshot(uuid).ifPresent(snapshots::add);
+		for (String id : GSON.fromJson(raw, String[].class)) {
+			loadSnapshot(UUID.fromString(id)).ifPresent(snapshots::add);
 		}
 		return snapshots;
 	}
 
-	private Optional<PlayerSnapshot> loadSnapshot(UUID uuid) throws SQLException {
-		String current = null;
-		String note = null;
-		long minutes = 0;
-		int sessions = 0;
-		try (PreparedStatement statement = connection.prepareStatement(
-			"SELECT current_username, note, total_minutes, session_count FROM players WHERE uuid = ?")) {
-			statement.setString(1, uuid.toString());
-			try (ResultSet rs = statement.executeQuery()) {
-				if (!rs.next()) {
-					return Optional.empty();
-				}
-				current = rs.getString("current_username");
-				note = rs.getString("note");
-				minutes = rs.getLong("total_minutes");
-				sessions = rs.getInt("session_count");
-			}
+	private Optional<PlayerSnapshot> loadSnapshot(UUID uuid) {
+		PlayerRow row = playerRow(uuid);
+		if (row == null) {
+			return Optional.empty();
 		}
 		List<SeenName> names = new ArrayList<>();
-		try (PreparedStatement statement = connection.prepareStatement(
-			"SELECT username, last_seen FROM username_history WHERE uuid = ? ORDER BY last_seen DESC")) {
-			statement.setString(1, uuid.toString());
-			try (ResultSet rs = statement.executeQuery()) {
-				while (rs.next()) {
-					names.add(new SeenName(rs.getString("username"), Instant.ofEpochMilli(rs.getLong("last_seen"))));
-				}
+		String prefix = uuid + "\t";
+		Iterator<String> keys = history.keyIterator(prefix);
+		while (keys.hasNext()) {
+			String key = keys.next();
+			if (!key.startsWith(prefix)) {
+				break;
 			}
+			HistoryRow seen = GSON.fromJson(history.get(key), HistoryRow.class);
+			names.add(new SeenName(seen.username(), Instant.ofEpochMilli(seen.lastSeen())));
 		}
-		int days = 0;
-		try (PreparedStatement statement = connection.prepareStatement("SELECT COUNT(*) FROM play_days WHERE uuid = ?")) {
-			statement.setString(1, uuid.toString());
-			try (ResultSet rs = statement.executeQuery()) {
-				if (rs.next()) {
-					days = rs.getInt(1);
-				}
-			}
-		}
+		names.sort(Comparator.comparing(SeenName::lastSeen).reversed());
 		return Optional.of(new PlayerSnapshot(
 			uuid,
-			current,
-			Optional.ofNullable(note).filter(value -> !value.isBlank()),
-			minutes,
-			sessions,
-			days,
+			row.currentUsername(),
+			Optional.ofNullable(row.note()).filter(value -> !value.isBlank()),
+			row.totalMinutes(),
+			row.sessionCount(),
+			countPrefix(playDays, prefix),
 			names
 		));
 	}
 
-	private boolean existsOnThread(UUID uuid) throws SQLException {
-		try (PreparedStatement statement = connection.prepareStatement("SELECT 1 FROM players WHERE uuid = ?")) {
-			statement.setString(1, uuid.toString());
-			try (ResultSet rs = statement.executeQuery()) {
-				return rs.next();
+	private PlayerRow playerRow(UUID uuid) {
+		String raw = players.get(uuid.toString());
+		return raw == null ? null : GSON.fromJson(raw, PlayerRow.class);
+	}
+
+	private void putPlayer(UUID uuid, PlayerRow row) {
+		players.put(uuid.toString(), GSON.toJson(row));
+	}
+
+	private void ensurePlayerRow(UUID uuid, String username) {
+		if (playerRow(uuid) != null) {
+			return;
+		}
+		putPlayer(uuid, new PlayerRow(username, null, 0, 0));
+		indexName(uuid, username);
+	}
+
+	private void setCurrentUsername(UUID uuid, String username) {
+		PlayerRow row = playerRow(uuid);
+		if (row == null) {
+			return;
+		}
+		putPlayer(uuid, new PlayerRow(username, row.note(), row.totalMinutes(), row.sessionCount()));
+		indexName(uuid, username);
+	}
+
+	private void touchUsername(UUID uuid, String username, Instant seenAt) {
+		String key = uuid + "\t" + username.toLowerCase(Locale.ROOT);
+		String raw = history.get(key);
+		long millis = seenAt.toEpochMilli();
+		if (raw != null) {
+			HistoryRow existing = GSON.fromJson(raw, HistoryRow.class);
+			if (existing.lastSeen() >= millis) {
+				indexName(uuid, existing.username());
+				return;
 			}
 		}
+		history.put(key, GSON.toJson(new HistoryRow(username, millis)));
+		indexName(uuid, username);
 	}
 
-	private void ensurePlayerRow(UUID uuid, String username) throws SQLException {
-		try (PreparedStatement statement = connection.prepareStatement(
-			"INSERT OR IGNORE INTO players(uuid, current_username) VALUES(?, ?)")) {
-			statement.setString(1, uuid.toString());
-			statement.setString(2, username);
-			statement.executeUpdate();
+	private void indexName(UUID uuid, String username) {
+		String key = username.toLowerCase(Locale.ROOT);
+		String id = uuid.toString();
+		String raw = nameIndex.get(key);
+		List<String> ids = raw == null ? new ArrayList<>() : new ArrayList<>(List.of(GSON.fromJson(raw, String[].class)));
+		if (!ids.contains(id)) {
+			ids.add(id);
+			nameIndex.put(key, GSON.toJson(ids));
 		}
 	}
 
-	private void setCurrentUsername(UUID uuid, String username) throws SQLException {
-		try (PreparedStatement statement = connection.prepareStatement(
-			"UPDATE players SET current_username = ? WHERE uuid = ?")) {
-			statement.setString(1, username);
-			statement.setString(2, uuid.toString());
-			statement.executeUpdate();
+	private void addSession(UUID uuid, String sessionId) {
+		String key = uuid + "\t" + sessionId;
+		if (playSessions.containsKey(key)) {
+			return;
 		}
+		playSessions.put(key, "1");
+		PlayerRow row = playerRow(uuid);
+		putPlayer(uuid, new PlayerRow(row.currentUsername(), row.note(), row.totalMinutes(), row.sessionCount() + 1));
 	}
 
-	private void touchUsername(UUID uuid, String username, Instant seenAt) throws SQLException {
-		try (PreparedStatement statement = connection.prepareStatement(
-			"INSERT INTO username_history(uuid, username, last_seen) VALUES(?, ?, ?) " +
-				"ON CONFLICT DO UPDATE SET last_seen = CASE WHEN excluded.last_seen > last_seen THEN excluded.last_seen ELSE last_seen END")) {
-			statement.setString(1, uuid.toString());
-			statement.setString(2, username);
-			statement.setLong(3, seenAt.toEpochMilli());
-			statement.executeUpdate();
-		}
-	}
-
-	private void addSession(UUID uuid, String sessionId) throws SQLException {
-		try (PreparedStatement insert = connection.prepareStatement(
-			"INSERT OR IGNORE INTO play_sessions(uuid, session_id) VALUES(?, ?)")) {
-			insert.setString(1, uuid.toString());
-			insert.setString(2, sessionId);
-			int added = insert.executeUpdate();
-			if (added > 0) {
-				try (PreparedStatement bump = connection.prepareStatement(
-					"UPDATE players SET session_count = session_count + 1 WHERE uuid = ?")) {
-					bump.setString(1, uuid.toString());
-					bump.executeUpdate();
-				}
-			}
-		}
-	}
-
-	private void addMinute(UUID uuid, LocalDate day) throws SQLException {
+	private void addMinute(UUID uuid, LocalDate day) {
 		ensurePlayDay(uuid, day);
-		try (PreparedStatement dayStmt = connection.prepareStatement(
-			"UPDATE play_days SET minutes = minutes + 1 WHERE uuid = ? AND day = ?")) {
-			dayStmt.setString(1, uuid.toString());
-			dayStmt.setString(2, day.toString());
-			dayStmt.executeUpdate();
-		}
-		try (PreparedStatement total = connection.prepareStatement(
-			"UPDATE players SET total_minutes = total_minutes + 1 WHERE uuid = ?")) {
-			total.setString(1, uuid.toString());
-			total.executeUpdate();
-		}
+		String key = uuid + "\t" + day;
+		long minutes = Long.parseLong(playDays.get(key)) + 1;
+		playDays.put(key, Long.toString(minutes));
+		PlayerRow row = playerRow(uuid);
+		putPlayer(uuid, new PlayerRow(row.currentUsername(), row.note(), row.totalMinutes() + 1, row.sessionCount()));
 	}
 
-	private void ensurePlayDay(UUID uuid, LocalDate day) throws SQLException {
-		try (PreparedStatement statement = connection.prepareStatement(
-			"INSERT OR IGNORE INTO play_days(uuid, day, minutes) VALUES(?, ?, 0)")) {
-			statement.setString(1, uuid.toString());
-			statement.setString(2, day.toString());
-			statement.executeUpdate();
+	private void ensurePlayDay(UUID uuid, LocalDate day) {
+		playDays.putIfAbsent(uuid + "\t" + day, "0");
+	}
+
+	private static int countPrefix(MVMap<String, String> map, String prefix) {
+		int count = 0;
+		Iterator<String> keys = map.keyIterator(prefix);
+		while (keys.hasNext()) {
+			String key = keys.next();
+			if (!key.startsWith(prefix)) {
+				break;
+			}
+			count++;
 		}
+		return count;
+	}
+
+	private static String blankToNull(String note) {
+		return note == null || note.isBlank() ? null : note;
 	}
 
 	private static RuntimeException unwrap(ExecutionException e) {

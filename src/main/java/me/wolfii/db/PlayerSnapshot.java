@@ -22,4 +22,8 @@ public record PlayerSnapshot(
 			.filter(name -> !name.username().equalsIgnoreCase(currentUsername))
 			.toList();
 	}
+
+	public boolean hasPlayed() {
+		return totalMinutes > 0 || sessionCount > 0 || daysPlayed > 0;
+	}
 }

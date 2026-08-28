@@ -23,8 +23,8 @@ dependencies {
 	implementation "net.fabricmc:fabric-loader:${project.loader_version}"
 	implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
 
-	// Java has no built-in database. SQLite is a small file-backed engine that fits this dataset.
-	include implementation('org.xerial:sqlite-jdbc:3.50.3.0')
+	// Java has no built-in database. H2 MVStore is a ~350 KB pure-Java single-file store.
+	include implementation('com.h2database:h2-mvstore:2.4.240')
 
 	// Optional AllTheLogs API, never packaged. This coordinate is not published yet;
 	// it is always resolved from the git submodule through the includeBuild
@@ -34,7 +34,8 @@ dependencies {
 		transitive = false
 	}
 
-	testImplementation 'org.xerial:sqlite-jdbc:3.50.3.0'
+	testImplementation 'com.h2database:h2-mvstore:2.4.240'
+	testImplementation 'com.google.code.gson:gson:2.13.1'
 	testImplementation 'org.junit.jupiter:junit-jupiter:5.11.4'
 	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
