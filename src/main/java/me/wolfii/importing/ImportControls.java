@@ -99,15 +99,7 @@ public final class ImportControls {
             return;
         }
         ImportProgress progress = latest;
-        if (progress.total() > 0) {
-            progress(QueryMessages.importStatus(
-                "AllTheLogs import is still running (" + progress.processed() + "/" + progress.total() + ")."
-            ));
-        } else {
-            progress(QueryMessages.importStatus(
-                "AllTheLogs import is still running (" + progress.processed() + " messages)."
-            ));
-        }
+        progress(QueryMessages.importStillRunning(progress.processed(), progress.total()));
     }
 
     void save(ImportProgress progress) {
@@ -118,7 +110,7 @@ public final class ImportControls {
 
     void saveStopped(ImportProgress progress) {
         save(progress.withStatus(ImportProgress.STATUS_STOPPED));
-        chat(QueryMessages.importStatus("AllTheLogs import stopped (" + progress.processed() + " messages)."));
+        chat(QueryMessages.importStopped(progress.processed()));
     }
 
     void progress(Component message) {

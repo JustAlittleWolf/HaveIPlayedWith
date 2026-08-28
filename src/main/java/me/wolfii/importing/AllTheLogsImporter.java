@@ -148,7 +148,7 @@ public final class AllTheLogsImporter {
             controls.save(new ImportProgress(
                 ImportProgress.SOURCE_ALLTHELOGS, processed, total, lastTimestamp, skip, ImportProgress.STATUS_DONE, controls.silenced()
             ));
-            controls.chat(QueryMessages.importStatus("AllTheLogs import finished (" + processed + " messages)."));
+            controls.chat(QueryMessages.importFinished(processed));
         } catch (Exception e) {
             LOGGER.warn("AllTheLogs import failed", e);
             controls.chat(QueryMessages.importStatus("AllTheLogs import failed. It will resume next launch."));
@@ -200,11 +200,6 @@ public final class AllTheLogsImporter {
     }
 
     private void report(long processed, long total) {
-        if (total > 0) {
-            int percent = (int) Math.min(100, (processed * 100) / total);
-            controls.progress(QueryMessages.importStatus("AllTheLogs import: " + processed + "/" + total + " (" + percent + "%)"));
-        } else {
-            controls.progress(QueryMessages.importStatus("AllTheLogs import: " + processed + " messages..."));
-        }
+        controls.progress(QueryMessages.importProgress(processed, total));
     }
 }
