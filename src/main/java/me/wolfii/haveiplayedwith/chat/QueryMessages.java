@@ -29,10 +29,6 @@ public final class QueryMessages {
         return ChatStyle.gray("haveiplayedwith.query.not_played", ChatStyle.clickableName(name, ChatStyle.UNKNOWN, true, uuid));
     }
 
-    public static Component noMatchingPlayers() {
-        return ChatStyle.gray("haveiplayedwith.query.no_players");
-    }
-
     public static Component playedWith(PlayerSnapshot player) {
         MutableComponent name = ChatStyle.clickableName(player.currentUsername(), ChatStyle.NAME, false, player.uuid());
         MutableComponent duration = ChatStyle.colored(DurationFormat.compact(player.totalMinutes()), ChatStyle.DURATION)

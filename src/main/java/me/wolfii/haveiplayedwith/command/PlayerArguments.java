@@ -1,25 +1,53 @@
 package me.wolfii.haveiplayedwith.command;
 
-import com.mojang.brigadier.context.CommandContext;
-import com.mojang.brigadier.exceptions.CommandSyntaxException;
-import me.wolfii.clientdatacommandselector.ClientEntityArgument;
-import me.wolfii.clientdatacommandselector.ClientEntitySelector;
-import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
+import me.wolfii.haveiplayedwith.mojang.MojangProfileApi;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientPacketListener;
 import net.minecraft.client.multiplayer.PlayerInfo;
-import net.minecraft.commands.arguments.selector.EntitySelector;
-import net.minecraft.world.entity.player.Player;
 
-import java.util.ArrayList;
-import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.regex.Pattern;
 
 final class PlayerArguments {
+    private static final Pattern DASHED_UUID = Pattern.compile(
+        "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+    );
+    private static final Pattern FLAT_UUID = Pattern.compile("[0-9a-fA-F]{32}");
+
     private PlayerArguments() {
+    }
+
+    static boolean isUuidToken(String token) {
+        return token != null && (DASHED_UUID.matcher(token).matches() || FLAT_UUID.matcher(token).matches());
+    }
+
+    /**
+     * Hyphenated tokens and 32-character hex strings are treated as UUIDs, not names.
+     */
+    static boolean looksLikeUuid(String token) {
+        if (token == null || token.isEmpty()) {
+            return false;
+        }
+        if (token.indexOf('-') >= 0) {
+            return true;
+        }
+        return token.length() == 32 && token.chars().allMatch(ch -> Character.digit(ch, 16) >= 0);
+    }
+
+    static ResolvedPlayer parseToken(String token) {
+        if (token == null || token.isEmpty()) {
+            throw new IllegalArgumentException("empty player target");
+        }
+        if (isUuidToken(token)) {
+            return new ResolvedPlayer(null, MojangProfileApi.parseUuid(token));
+        }
+        if (looksLikeUuid(token)) {
+            throw new IllegalArgumentException("invalid uuid: " + token);
+        }
+        return new ResolvedPlayer(token, null);
     }
 
     static UUID uuidFromTab(String name) {
@@ -47,39 +75,6 @@ final class PlayerArguments {
             Thread.currentThread().interrupt();
         }
         return found.get();
-    }
-
-    static ResolvedPlayer resolvePlayer(CommandContext<FabricClientCommandSource> context, String arg) throws CommandSyntaxException {
-        ClientEntitySelector selector = (ClientEntitySelector) context.getArgument(arg, EntitySelector.class);
-        try {
-            Player found = ClientEntityArgument.getPlayer(context, arg);
-            return new ResolvedPlayer(found.getGameProfile().name(), found.getGameProfile().id());
-        } catch (CommandSyntaxException e) {
-            String name = selector.clientdatacommandupdated$playerName();
-            UUID uuid = selector.clientdatacommandupdated$entityUUID();
-            if (name != null || uuid != null) {
-                return new ResolvedPlayer(name, uuid);
-            }
-            return null;
-        }
-    }
-
-    static List<ResolvedPlayer> resolvePlayers(CommandContext<FabricClientCommandSource> context, String arg) throws CommandSyntaxException {
-        List<? extends Player> found = ClientEntityArgument.getPlayers(context, arg);
-        if (!found.isEmpty()) {
-            List<ResolvedPlayer> resolved = new ArrayList<>(found.size());
-            for (Player player : found) {
-                resolved.add(new ResolvedPlayer(player.getGameProfile().name(), player.getGameProfile().id()));
-            }
-            return resolved;
-        }
-        ClientEntitySelector selector = (ClientEntitySelector) context.getArgument(arg, EntitySelector.class);
-        String name = selector.clientdatacommandupdated$playerName();
-        UUID uuid = selector.clientdatacommandupdated$entityUUID();
-        if (name != null || uuid != null) {
-            return List.of(new ResolvedPlayer(name, uuid));
-        }
-        return List.of();
     }
 
     record ResolvedPlayer(String name, UUID uuid) {
