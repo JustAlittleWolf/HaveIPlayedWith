@@ -7,17 +7,11 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.HoverEvent;
 import net.minecraft.network.chat.MutableComponent;
 
-import java.time.ZoneId;
-import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 import java.util.UUID;
 
 public final class QueryMessages {
-    private static final DateTimeFormatter LAST_SEEN = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm", Locale.ROOT);
-    private static final DateTimeFormatter DATE = DateTimeFormatter.ofPattern("yyyy-MM-dd", Locale.ROOT);
-
     private QueryMessages() {
     }
 
@@ -46,13 +40,12 @@ public final class QueryMessages {
         List<SeenName> past = player.pastNames();
         List<Component> names = new ArrayList<>(past.size());
         for (SeenName seen : past) {
-            String when = LAST_SEEN.format(seen.lastSeen().atZone(ZoneId.systemDefault()));
             Component hover = ChatStyle.wording(
                 "haveiplayedwith.query.past_name.hover",
                 ChatStyle.usernameText(seen.username()),
-                ChatStyle.count(when)
+                ChatStyle.count(ChatTimes.dateTime(seen.lastSeen()))
             );
-            names.add(ChatStyle.username(seen.username(), hover));
+            names.add(ChatStyle.usernameWithHover(seen.username(), hover));
         }
         return ChatStyle.wording("haveiplayedwith.query.past_names", ChatStyle.join(names));
     }
@@ -92,7 +85,7 @@ public final class QueryMessages {
 
     private static Component lastPlayedHover(PlayerSnapshot player) {
         return player.lastPlayedBeforeToday()
-            .map(day -> ChatStyle.wording("haveiplayedwith.query.last_played", ChatStyle.count(DATE.format(day))))
+            .map(day -> ChatStyle.wording("haveiplayedwith.query.last_played", ChatStyle.count(ChatTimes.date(day))))
             .orElseGet(() -> ChatStyle.wording("haveiplayedwith.query.last_played.today"));
     }
 
