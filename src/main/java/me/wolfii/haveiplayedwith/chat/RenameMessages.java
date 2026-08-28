@@ -9,10 +9,10 @@ public final class RenameMessages {
     }
 
     public static Component playerRenamed(String previous, String current, UUID uuid) {
-        return ChatStyle.gray(
+        return ChatStyle.wording(
             "haveiplayedwith.observe.renamed",
-            ChatStyle.clickableName(previous, ChatStyle.PAST_NAME, false, uuid),
-            ChatStyle.clickableName(current, ChatStyle.NAME, false, uuid)
+            ChatStyle.username(previous, uuid),
+            ChatStyle.username(current, uuid)
         );
     }
 }

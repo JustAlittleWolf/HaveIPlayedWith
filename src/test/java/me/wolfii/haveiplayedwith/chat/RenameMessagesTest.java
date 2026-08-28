@@ -19,5 +19,11 @@ class RenameMessagesTest {
         TranslatableContents contents = (TranslatableContents) message.getContents();
         assertEquals("haveiplayedwith.observe.renamed", contents.getKey());
         assertEquals(2, contents.getArgs().length);
+        Component previous = (Component) contents.getArgs()[0];
+        Component current = (Component) contents.getArgs()[1];
+        assertEquals(Boolean.TRUE, previous.getStyle().isItalic());
+        assertEquals(Boolean.TRUE, current.getStyle().isItalic());
+        assertEquals(Boolean.TRUE, previous.getStyle().isUnderlined());
+        assertEquals(Boolean.TRUE, current.getStyle().isUnderlined());
     }
 }

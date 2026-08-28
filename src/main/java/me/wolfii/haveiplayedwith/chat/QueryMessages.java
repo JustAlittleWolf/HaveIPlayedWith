@@ -26,24 +26,27 @@ public final class QueryMessages {
     }
 
     public static Component notPlayedWith(String name, UUID uuid) {
-        return ChatStyle.gray("haveiplayedwith.query.not_played", ChatStyle.clickableName(name, ChatStyle.UNKNOWN, true, uuid));
+        return ChatStyle.wording("haveiplayedwith.query.not_played", ChatStyle.username(name, uuid));
     }
 
     public static Component noMatchingPlayers() {
-        return ChatStyle.gray("haveiplayedwith.query.no_players");
+        return ChatStyle.wording("haveiplayedwith.query.no_players");
     }
 
     public static Component playedWith(PlayerSnapshot player) {
-        MutableComponent name = ChatStyle.clickableName(player.currentUsername(), ChatStyle.NAME, false, player.uuid());
-        MutableComponent duration = ChatStyle.colored(DurationFormat.compact(player.totalMinutes()), ChatStyle.DURATION)
-            .withStyle(style -> style.withHoverEvent(new HoverEvent.ShowText(
-                ChatStyle.colored(DurationFormat.hover(player.totalMinutes()), ChatStyle.DURATION)
-            )));
-        MutableComponent days = ChatStyle.colored(dayLabel(player.daysPlayed()), ChatStyle.DAYS)
+        MutableComponent duration = DurationFormat.compact(player.totalMinutes()).copy()
+            .withStyle(style -> style.withHoverEvent(new HoverEvent.ShowText(DurationFormat.hover(player.totalMinutes()))));
+        MutableComponent days = dayLabel(player.daysPlayed()).copy()
             .withStyle(style -> style.withHoverEvent(new HoverEvent.ShowText(daysHover(player))));
-        MutableComponent sessions = ChatStyle.colored(sessionLabel(player.sessionCount()), ChatStyle.SESSIONS)
+        MutableComponent sessions = sessionLabel(player.sessionCount()).copy()
             .withStyle(style -> style.withHoverEvent(new HoverEvent.ShowText(sessionsHover(player))));
-        return ChatStyle.gray("haveiplayedwith.query.played", name, duration, days, sessions);
+        return ChatStyle.wording(
+            "haveiplayedwith.query.played",
+            ChatStyle.username(player.currentUsername(), player.uuid()),
+            duration,
+            days,
+            sessions
+        );
     }
 
     public static Component pastNames(PlayerSnapshot player) {
@@ -51,50 +54,54 @@ public final class QueryMessages {
         List<Component> names = new ArrayList<>(past.size());
         for (SeenName seen : past) {
             String when = LAST_SEEN.format(seen.lastSeen().atZone(ZoneId.systemDefault()));
-            names.add(ChatStyle.colored(seen.username(), ChatStyle.PAST_NAME).withStyle(style -> style.withHoverEvent(
-                new HoverEvent.ShowText(Component.translatable("haveiplayedwith.query.past_name.hover", seen.username(), when)
-                    .withStyle(style1 -> style1.withColor(ChatStyle.rgb(ChatStyle.PAST_NAME))))
-            )));
+            Component hover = ChatStyle.wording(
+                "haveiplayedwith.query.past_name.hover",
+                ChatStyle.usernameText(seen.username()),
+                ChatStyle.count(when)
+            );
+            names.add(ChatStyle.username(seen.username(), hover));
         }
-        return ChatStyle.gray("haveiplayedwith.query.past_names", ChatStyle.join(names));
+        return ChatStyle.wording("haveiplayedwith.query.past_names", ChatStyle.join(names));
     }
 
     public static Component seenOn(PlayerSnapshot player) {
         List<Component> servers = new ArrayList<>(player.servers().size());
         for (ServerPlay server : player.servers()) {
-            MutableComponent id = ChatStyle.colored(server.serverId(), ChatStyle.SERVER).withStyle(style -> style.withHoverEvent(
-                new HoverEvent.ShowText(ChatStyle.colored(DurationFormat.hover(server.minutes()), ChatStyle.DURATION))
+            MutableComponent id = ChatStyle.data(server.serverId(), ChatStyle.SERVER).withStyle(style -> style.withHoverEvent(
+                new HoverEvent.ShowText(DurationFormat.hover(server.minutes()))
             ));
-            servers.add(ChatStyle.gray("haveiplayedwith.query.server.entry", id, ChatStyle.colored(DurationFormat.compact(server.minutes()), ChatStyle.DURATION)));
+            servers.add(ChatStyle.wording("haveiplayedwith.query.server.entry", id, DurationFormat.compact(server.minutes())));
         }
-        return ChatStyle.gray("haveiplayedwith.query.seen_on", ChatStyle.join(servers));
+        return ChatStyle.wording("haveiplayedwith.query.seen_on", ChatStyle.join(servers));
     }
 
     public static Component unknownAccount(String name) {
-        return ChatStyle.gray("haveiplayedwith.query.unknown_account", ChatStyle.clickableName(name, ChatStyle.UNKNOWN, true, null));
+        return ChatStyle.wording("haveiplayedwith.query.unknown_account", ChatStyle.username(name, null));
     }
 
     private static Component dayLabel(int days) {
-        return days == 1
-            ? Component.translatable("haveiplayedwith.query.days.one")
-            : Component.translatable("haveiplayedwith.query.days", days);
+        return ChatStyle.wording(
+            days == 1 ? "haveiplayedwith.query.days.one" : "haveiplayedwith.query.days",
+            ChatStyle.count(days)
+        );
     }
 
     private static Component sessionLabel(int sessions) {
-        return sessions == 1
-            ? Component.translatable("haveiplayedwith.query.sessions.one")
-            : Component.translatable("haveiplayedwith.query.sessions", sessions);
+        return ChatStyle.wording(
+            sessions == 1 ? "haveiplayedwith.query.sessions.one" : "haveiplayedwith.query.sessions",
+            ChatStyle.count(sessions)
+        );
     }
 
     private static Component daysHover(PlayerSnapshot player) {
         return player.lastPlayedBeforeToday()
-            .map(day -> ChatStyle.gray("haveiplayedwith.query.last_played", DATE.format(day)))
-            .orElseGet(() -> ChatStyle.gray("haveiplayedwith.query.last_played.today"));
+            .map(day -> ChatStyle.wording("haveiplayedwith.query.last_played", ChatStyle.count(DATE.format(day))))
+            .orElseGet(() -> ChatStyle.wording("haveiplayedwith.query.last_played.today"));
     }
 
     private static Component sessionsHover(PlayerSnapshot player) {
         return player.mostPlayedServer()
-            .map(server -> ChatStyle.gray("haveiplayedwith.query.most_server", ChatStyle.colored(server.serverId(), ChatStyle.SERVER)))
-            .orElseGet(() -> ChatStyle.gray("haveiplayedwith.query.most_server.none"));
+            .map(server -> ChatStyle.wording("haveiplayedwith.query.most_server", ChatStyle.data(server.serverId(), ChatStyle.SERVER)))
+            .orElseGet(() -> ChatStyle.wording("haveiplayedwith.query.most_server.none"));
     }
 }
