@@ -18,14 +18,10 @@ public final class QueryMessages {
     public static final int NAME = 0x7CFF9A;
     /** Play time, including compact and hover duration strings. */
     public static final int DURATION = 0x6EC8FF;
-    /** Counts: days played, sessions, and import progress numbers. */
+    /** Counts (days, sessions, import progress) and calendar timestamps. */
     public static final int COUNT = 0xFFD166;
-    public static final int DAYS = COUNT;
-    public static final int SESSIONS = COUNT;
     /** Player UUIDs in hovers. */
     public static final int UUID_COLOR = 0xC4B5FD;
-    /** Calendar timestamps (last seen, etc.). */
-    public static final int TIMESTAMP = 0xFFD166;
     public static final int NOTE = 0xFFCC99;
     public static final int SERVER = 0x5EEAD4;
 
@@ -77,7 +73,7 @@ public final class QueryMessages {
             MutableComponent hover = wording("Last seen as ")
                 .append(usernameText(seen.username()))
                 .append(wording(" at "))
-                .append(data(when, TIMESTAMP));
+                .append(data(when, COUNT));
             line.append(username(seen.username(), hover));
         }
         line.append(wording(" in the past."));
