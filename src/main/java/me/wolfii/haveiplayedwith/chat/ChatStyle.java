@@ -21,7 +21,7 @@ final class ChatStyle {
     /** Player UUIDs in hovers. */
     static final int UUID_COLOR = 0xC4B5FD;
     static final int NOTE = 0xFFCC99;
-    static final int SERVER = 0x5EEAD4;
+    static final int SERVER = 0xFF9A9A;
 
     private ChatStyle() {
     }

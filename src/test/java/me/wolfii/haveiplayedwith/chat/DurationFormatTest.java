@@ -18,8 +18,9 @@ class DurationFormatTest {
 
     @Test
     void hoursUntilNinetyNine() {
-        assertTranslation("haveiplayedwith.duration.hours", DurationFormat.compact(60), duration("1.0"));
-        assertTranslation("haveiplayedwith.duration.hours", DurationFormat.compact(99 * 60), duration("99.0"));
+        assertTranslation("haveiplayedwith.duration.hour", DurationFormat.compact(60), duration("1"));
+        assertTranslation("haveiplayedwith.duration.hours", DurationFormat.compact(90), duration("1.5"));
+        assertTranslation("haveiplayedwith.duration.hours", DurationFormat.compact(99 * 60), duration("99"));
     }
 
     @Test
