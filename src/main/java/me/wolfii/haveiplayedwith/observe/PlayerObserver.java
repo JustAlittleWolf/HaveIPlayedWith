@@ -3,6 +3,7 @@ package me.wolfii.haveiplayedwith.observe;
 import com.mojang.authlib.GameProfile;
 import me.wolfii.haveiplayedwith.MinecraftUsernames;
 import me.wolfii.haveiplayedwith.ModLog;
+import me.wolfii.haveiplayedwith.ModThreads;
 import me.wolfii.haveiplayedwith.chat.RenameMessages;
 import me.wolfii.haveiplayedwith.mojang.MojangProfileApi;
 import me.wolfii.haveiplayedwith.store.PlayerStore;
@@ -21,7 +22,10 @@ import java.util.HashSet;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.*;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
 
 /**
  * Watches the tab list and nearby players every tick so joins and name changes are noticed
@@ -38,8 +42,8 @@ public final class PlayerObserver {
     private static final long CREDIT_MEMORY_MINUTES = 60;
     private final PlayerStore players;
     private final MojangProfileApi mojang;
-    private final ExecutorService dispatcher = Executors.newSingleThreadExecutor(named("haveiplayedwith-sightings"));
-    private final ExecutorService lookupWorker = Executors.newSingleThreadExecutor(named("haveiplayedwith-mojang"));
+    private final ExecutorService dispatcher = ModThreads.singleWorker("sightings");
+    private final ExecutorService lookupWorker = ModThreads.singleWorker("mojang");
     private final BlockingQueue<Sighting> sightings = new ArrayBlockingQueue<>(MAX_SIGHTING_BUFFER);
     private final ConcurrentHashMap<UUID, Sighting> pendingLookups = new ConcurrentHashMap<>();
     private final BlockingQueue<UUID> lookups = new ArrayBlockingQueue<>(MAX_LOOKUP_BUFFER);
@@ -54,14 +58,6 @@ public final class PlayerObserver {
         this.mojang = mojang;
         dispatcher.execute(this::dispatchLoop);
         lookupWorker.execute(this::lookupLoop);
-    }
-
-    private static ThreadFactory named(String name) {
-        return runnable -> {
-            Thread thread = new Thread(runnable, name);
-            thread.setDaemon(true);
-            return thread;
-        };
     }
 
     public String liveSessionId() {

@@ -2,6 +2,7 @@ package me.wolfii.haveiplayedwith.command;
 
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.StringArgumentType;
+import me.wolfii.haveiplayedwith.ModThreads;
 import me.wolfii.haveiplayedwith.importing.ImportControls;
 import me.wolfii.haveiplayedwith.mojang.MojangProfileApi;
 import me.wolfii.haveiplayedwith.observe.PlayerObserver;
@@ -11,7 +12,6 @@ import net.fabricmc.fabric.api.client.command.v2.ClientCommands;
 import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
 
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
 public final class HaveIPlayedWithCommands {
     private final ImportControls imports;
@@ -20,11 +20,7 @@ public final class HaveIPlayedWithCommands {
 
     public HaveIPlayedWithCommands(PlayerStore players, MojangProfileApi mojang, ImportControls imports, PlayerObserver observer) {
         this.imports = imports;
-        ExecutorService worker = Executors.newSingleThreadExecutor(runnable -> {
-            Thread thread = new Thread(runnable, "haveiplayedwith-commands");
-            thread.setDaemon(true);
-            return thread;
-        });
+        ExecutorService worker = ModThreads.singleWorker("commands");
         this.lookup = new PlayerLookup(players, mojang, worker, observer::liveSessionId);
         this.notes = new PlayerNotes(players, mojang, worker);
     }

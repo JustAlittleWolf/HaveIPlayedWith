@@ -1,24 +1,20 @@
 package me.wolfii.haveiplayedwith.store;
 
 import me.wolfii.haveiplayedwith.ModLog;
+import me.wolfii.haveiplayedwith.ModThreads;
 
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 /**
  * Serializes every store read and write onto one thread and commits after each task.
  */
 final class StoreWorker implements AutoCloseable {
-    private final ExecutorService worker = Executors.newSingleThreadExecutor(runnable -> {
-        Thread thread = new Thread(runnable, "haveiplayedwith-db");
-        thread.setDaemon(true);
-        return thread;
-    });
+    private final ExecutorService worker = ModThreads.singleWorker("db");
     private final Connection connection;
 
     StoreWorker(Connection connection) {

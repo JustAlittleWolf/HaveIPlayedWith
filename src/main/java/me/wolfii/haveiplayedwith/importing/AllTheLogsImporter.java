@@ -5,6 +5,7 @@ import me.wolfii.allthelogs.api.ChatEntry;
 import me.wolfii.allthelogs.api.ChatQuery;
 import me.wolfii.allthelogs.api.LogDatabase;
 import me.wolfii.haveiplayedwith.ModLog;
+import me.wolfii.haveiplayedwith.ModThreads;
 import me.wolfii.haveiplayedwith.chat.ImportMessages;
 import me.wolfii.haveiplayedwith.crafty.CraftyPlayer;
 import me.wolfii.haveiplayedwith.crafty.CraftyPlayerApi;
@@ -18,7 +19,6 @@ import java.time.ZoneId;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
 public final class AllTheLogsImporter {
     private static final int PAGE_SIZE = 400;
@@ -29,11 +29,7 @@ public final class AllTheLogsImporter {
     private final CraftyPlayerApi crafty;
     private final MojangProfileApi mojang;
     private final ImportControls controls;
-    private final ExecutorService worker = Executors.newSingleThreadExecutor(runnable -> {
-        Thread thread = new Thread(runnable, "haveiplayedwith-import");
-        thread.setDaemon(true);
-        return thread;
-    });
+    private final ExecutorService worker = ModThreads.singleWorker("import");
 
     public AllTheLogsImporter(PlayerStore players, CraftyPlayerApi crafty, MojangProfileApi mojang, ImportControls controls) {
         this.players = players;
