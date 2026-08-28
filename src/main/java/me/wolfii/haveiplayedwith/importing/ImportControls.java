@@ -1,8 +1,8 @@
 package me.wolfii.haveiplayedwith.importing;
 
-import me.wolfii.haveiplayedwith.command.QueryMessages;
+import me.wolfii.haveiplayedwith.chat.ImportMessages;
 import me.wolfii.haveiplayedwith.store.ImportProgress;
-import me.wolfii.haveiplayedwith.store.PlayerDatabase;
+import me.wolfii.haveiplayedwith.store.ImportProgressStore;
 import net.minecraft.client.Minecraft;
 import net.minecraft.network.chat.Component;
 
@@ -13,7 +13,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * silence and stop commands can be registered even when that mod is absent.
  */
 public final class ImportControls {
-    private final PlayerDatabase database;
+    private final ImportProgressStore progressStore;
     private final AtomicBoolean scheduled = new AtomicBoolean(false);
     private final AtomicBoolean stopRequested = new AtomicBoolean(false);
     private final AtomicBoolean silenced = new AtomicBoolean(false);
@@ -22,9 +22,9 @@ public final class ImportControls {
     );
     private volatile Runnable startAllTheLogs;
 
-    public ImportControls(PlayerDatabase database) {
-        this.database = database;
-        database.importProgress(ImportProgress.SOURCE_ALLTHELOGS).ifPresent(stored -> {
+    public ImportControls(ImportProgressStore progressStore) {
+        this.progressStore = progressStore;
+        progressStore.get(ImportProgress.SOURCE_ALLTHELOGS).ifPresent(stored -> {
             latest = stored;
             silenced.set(stored.silenced());
         });
@@ -75,11 +75,11 @@ public final class ImportControls {
 
     public void stopFromCommand() {
         if (!scheduled.get()) {
-            chat(QueryMessages.importNotRunning());
+            chat(ImportMessages.notRunning());
             return;
         }
         stopRequested.set(true);
-        chat(QueryMessages.importStopping());
+        chat(ImportMessages.stopping());
     }
 
     public void toggleSilenceFromCommand() {
@@ -87,27 +87,27 @@ public final class ImportControls {
         silenced.set(next);
         ImportProgress stored = scheduled.get()
             ? latest
-            : database.importProgress(ImportProgress.SOURCE_ALLTHELOGS).orElse(latest);
+            : progressStore.get(ImportProgress.SOURCE_ALLTHELOGS).orElse(latest);
         save(stored.withSilenced(next));
-        chat(next ? QueryMessages.importSilenced() : QueryMessages.importUnsilenced());
+        chat(next ? ImportMessages.silenced() : ImportMessages.unsilenced());
     }
 
     public void notifyIfRunning() {
         if (!scheduled.get()) {
             return;
         }
-        progress(QueryMessages.importStillRunning(latest.processed(), latest.total()));
+        progress(ImportMessages.stillRunning(latest.processed(), latest.total()));
     }
 
     void save(ImportProgress progress) {
         ImportProgress stored = progress.withSilenced(silenced.get());
         latest = stored;
-        database.saveImportProgress(stored);
+        progressStore.save(stored);
     }
 
     void saveStopped(ImportProgress progress) {
         save(progress.withStatus(ImportProgress.STATUS_STOPPED));
-        chat(QueryMessages.importStopped(progress.processed()));
+        chat(ImportMessages.stopped(progress.processed()));
     }
 
     void progress(Component message) {

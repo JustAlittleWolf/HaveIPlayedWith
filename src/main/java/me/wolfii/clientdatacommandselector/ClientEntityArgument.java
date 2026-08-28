@@ -23,6 +23,14 @@ public interface ClientEntityArgument {
         return ((ClientEntityArgument) EntityArgument.player()).clientDataCommandUpdated$withAlwaysAllowAtSelectors();
     }
 
+    /**
+     * A single player by username or UUID. {@code @} selectors are never accepted,
+     * even if the player would otherwise have selector permission.
+     */
+    static EntityArgument playerNameOrUuid() {
+        return ((ClientEntityArgument) EntityArgument.player()).clientDataCommandUpdated$withoutAtSelectors();
+    }
+
     static EntityArgument players() {
         return ((ClientEntityArgument) EntityArgument.players()).clientDataCommandUpdated$withAlwaysAllowAtSelectors();
     }
@@ -44,4 +52,6 @@ public interface ClientEntityArgument {
     }
 
     EntityArgument clientDataCommandUpdated$withAlwaysAllowAtSelectors();
+
+    EntityArgument clientDataCommandUpdated$withoutAtSelectors();
 }

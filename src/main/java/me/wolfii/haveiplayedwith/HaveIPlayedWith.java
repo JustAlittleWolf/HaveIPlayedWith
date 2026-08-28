@@ -1,12 +1,12 @@
 package me.wolfii.haveiplayedwith;
 
-import me.wolfii.haveiplayedwith.command.Commands;
+import me.wolfii.haveiplayedwith.command.HaveIPlayedWithCommands;
+import me.wolfii.haveiplayedwith.crafty.CraftyPlayerApi;
 import me.wolfii.haveiplayedwith.importing.AllTheLogsCompat;
 import me.wolfii.haveiplayedwith.importing.ImportControls;
-import me.wolfii.haveiplayedwith.net.CraftyClient;
-import me.wolfii.haveiplayedwith.net.MojangClient;
+import me.wolfii.haveiplayedwith.mojang.MojangProfileApi;
 import me.wolfii.haveiplayedwith.observe.PlayerObserver;
-import me.wolfii.haveiplayedwith.store.PlayerDatabase;
+import me.wolfii.haveiplayedwith.store.PlayerStore;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.fabricmc.loader.api.FabricLoader;
@@ -19,23 +19,23 @@ public class HaveIPlayedWith implements ClientModInitializer {
     public static final String MOD_ID = "haveiplayedwith";
     public static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
 
-    private PlayerDatabase database;
+    private PlayerStore players;
     private PlayerObserver observer;
 
     @Override
     public void onInitializeClient() {
         try {
             Files.createDirectories(ModPaths.directory());
-            database = new PlayerDatabase(ModPaths.databaseFile());
-            MojangClient mojang = new MojangClient(database);
-            CraftyClient crafty = new CraftyClient(database);
-            observer = new PlayerObserver(database, mojang);
+            players = new PlayerStore(ModPaths.databaseFile());
+            MojangProfileApi mojang = new MojangProfileApi(players.mojangProfiles());
+            CraftyPlayerApi crafty = new CraftyPlayerApi(players.craftyProfiles());
+            observer = new PlayerObserver(players, mojang);
             observer.register();
-            ImportControls imports = new ImportControls(database);
+            ImportControls imports = new ImportControls(players.importProgress());
             if (FabricLoader.getInstance().isModLoaded("allthelogs")) {
-                AllTheLogsCompat.install(database, crafty, imports);
+                AllTheLogsCompat.install(players, crafty, imports);
             }
-            new Commands(database, mojang, imports).register();
+            new HaveIPlayedWithCommands(players, mojang, imports).register();
             ClientLifecycleEvents.CLIENT_STOPPING.register(client -> close());
             LOGGER.info("Have I Played With initialized ({})", ModPaths.databaseFile());
         } catch (Exception e) {
@@ -47,8 +47,8 @@ public class HaveIPlayedWith implements ClientModInitializer {
         if (observer != null) {
             observer.close();
         }
-        if (database != null) {
-            database.close();
+        if (players != null) {
+            players.close();
         }
     }
 }

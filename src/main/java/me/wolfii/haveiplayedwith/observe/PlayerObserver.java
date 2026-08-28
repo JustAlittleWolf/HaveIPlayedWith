@@ -2,8 +2,9 @@ package me.wolfii.haveiplayedwith.observe;
 
 import com.mojang.authlib.GameProfile;
 import me.wolfii.haveiplayedwith.MinecraftUsernames;
-import me.wolfii.haveiplayedwith.net.MojangClient;
-import me.wolfii.haveiplayedwith.store.PlayerDatabase;
+import me.wolfii.haveiplayedwith.chat.RenameMessages;
+import me.wolfii.haveiplayedwith.mojang.MojangProfileApi;
+import me.wolfii.haveiplayedwith.store.PlayerStore;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.minecraft.client.Minecraft;
@@ -11,12 +12,14 @@ import net.minecraft.client.multiplayer.ClientPacketListener;
 import net.minecraft.client.multiplayer.PlayerInfo;
 import net.minecraft.client.player.AbstractClientPlayer;
 import net.minecraft.client.player.LocalPlayer;
+import net.minecraft.network.chat.Component;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.HashSet;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.*;
@@ -35,8 +38,8 @@ public final class PlayerObserver {
     /** Sightings waiting to be classified as "needs a lookup" or "already known". */
     private static final int MAX_SIGHTING_BUFFER = 2048;
     private static final long CREDIT_MEMORY_MINUTES = 60;
-    private final PlayerDatabase database;
-    private final MojangClient mojang;
+    private final PlayerStore players;
+    private final MojangProfileApi mojang;
     private final ExecutorService dispatcher = Executors.newSingleThreadExecutor(named("haveiplayedwith-sightings"));
     private final ExecutorService lookupWorker = Executors.newSingleThreadExecutor(named("haveiplayedwith-mojang"));
     private final BlockingQueue<Sighting> sightings = new ArrayBlockingQueue<>(MAX_SIGHTING_BUFFER);
@@ -48,8 +51,8 @@ public final class PlayerObserver {
     /** One id for this client run, assigned at boot and kept across join/disconnect. */
     private final String sessionId = UUID.randomUUID().toString();
     private volatile String locationId;
-    public PlayerObserver(PlayerDatabase database, MojangClient mojang) {
-        this.database = database;
+    public PlayerObserver(PlayerStore players, MojangProfileApi mojang) {
+        this.players = players;
         this.mojang = mojang;
         dispatcher.execute(this::dispatchLoop);
         lookupWorker.execute(this::lookupLoop);
@@ -141,9 +144,6 @@ public final class PlayerObserver {
         while (!Thread.currentThread().isInterrupted()) {
             try {
                 Sighting sighting = sightings.take();
-                if (mojang.isFreshMismatch(sighting.uuid(), sighting.username())) {
-                    continue;
-                }
                 if (!mojang.needsFetch(sighting.uuid(), sighting.username())) {
                     credit(sighting);
                     continue;
@@ -173,9 +173,6 @@ public final class PlayerObserver {
                 if (profile.isEmpty() || !profile.get().username().equalsIgnoreCase(sighting.username())) {
                     continue;
                 }
-                if (!profile.get().username().equals(sighting.username())) {
-                    database.applyMojangUsername(uuid, profile.get().username(), Instant.now());
-                }
                 credit(new Sighting(uuid, profile.get().username(), sighting.day(), sighting.epochMinute(), sighting.sessionId(), sighting.serverId()));
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
@@ -189,10 +186,30 @@ public final class PlayerObserver {
     private void credit(Sighting sighting) {
         Long last = creditedMinute.put(sighting.uuid(), sighting.epochMinute());
         if (last != null && last == sighting.epochMinute()) {
-            database.applyMojangUsername(sighting.uuid(), sighting.username(), Instant.now());
+            announceRename(sighting.uuid(), players.applyMojangUsername(sighting.uuid(), sighting.username(), Instant.now()), sighting.username());
             return;
         }
-        database.recordLivePlay(sighting.uuid(), sighting.username(), sighting.day(), "live:" + sighting.sessionId(), sighting.serverId());
+        announceRename(
+            sighting.uuid(),
+            players.recordLivePlay(sighting.uuid(), sighting.username(), sighting.day(), "live:" + sighting.sessionId(), sighting.serverId()),
+            sighting.username()
+        );
+    }
+
+    private void announceRename(UUID uuid, Optional<String> previousName, String currentName) {
+        if (previousName.isEmpty()) {
+            return;
+        }
+        String previous = previousName.get();
+        Minecraft client = Minecraft.getInstance();
+        client.execute(() -> {
+            LocalPlayer self = client.player;
+            if (self == null || uuid.equals(self.getUUID())) {
+                return;
+            }
+            Component message = RenameMessages.playerRenamed(previous, currentName, uuid);
+            self.sendSystemMessage(message);
+        });
     }
 
     private record Sighting(UUID uuid, String username, LocalDate day, long epochMinute, String sessionId, String serverId) {

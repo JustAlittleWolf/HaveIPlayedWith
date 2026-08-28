@@ -3,9 +3,10 @@ package me.wolfii.haveiplayedwith.command;
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import me.wolfii.clientdatacommandselector.ClientEntityArgument;
+import me.wolfii.haveiplayedwith.chat.QueryMessages;
 import me.wolfii.haveiplayedwith.importing.ImportControls;
-import me.wolfii.haveiplayedwith.net.MojangClient;
-import me.wolfii.haveiplayedwith.store.PlayerDatabase;
+import me.wolfii.haveiplayedwith.mojang.MojangProfileApi;
+import me.wolfii.haveiplayedwith.store.PlayerStore;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommands;
 import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
@@ -14,20 +15,20 @@ import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-public final class Commands {
+public final class HaveIPlayedWithCommands {
     private final ImportControls imports;
     private final PlayerLookup lookup;
     private final PlayerNotes notes;
 
-    public Commands(PlayerDatabase database, MojangClient mojang, ImportControls imports) {
+    public HaveIPlayedWithCommands(PlayerStore players, MojangProfileApi mojang, ImportControls imports) {
         this.imports = imports;
         ExecutorService worker = Executors.newSingleThreadExecutor(runnable -> {
             Thread thread = new Thread(runnable, "haveiplayedwith-commands");
             thread.setDaemon(true);
             return thread;
         });
-        this.lookup = new PlayerLookup(database, mojang, worker);
-        this.notes = new PlayerNotes(database, mojang, worker);
+        this.lookup = new PlayerLookup(players, mojang, worker);
+        this.notes = new PlayerNotes(players, mojang, worker);
     }
 
     public void register() {
@@ -36,17 +37,15 @@ public final class Commands {
 
     private void register(CommandDispatcher<FabricClientCommandSource> dispatcher) {
         dispatcher.register(ClientCommands.literal("haveiplayedwith")
-            .then(ClientCommands.argument("player", ClientEntityArgument.players())
+            .then(ClientCommands.argument("player", ClientEntityArgument.playerNameOrUuid())
                 .executes(context -> {
-                    List<PlayerArguments.ResolvedPlayer> targets = PlayerArguments.resolvePlayers(context, "player");
-                    if (targets.isEmpty()) {
+                    PlayerArguments.ResolvedPlayer target = PlayerArguments.resolvePlayer(context, "player");
+                    if (target == null) {
                         CommandFeedback.tell(context.getSource(), QueryMessages.noMatchingPlayers());
                         return 0;
                     }
-                    for (PlayerArguments.ResolvedPlayer target : targets) {
-                        lookup.query(context.getSource(), target);
-                    }
-                    return targets.size();
+                    lookup.query(context.getSource(), target);
+                    return 1;
                 })));
         dispatcher.register(ClientCommands.literal("playernote")
             .then(ClientCommands.literal("confirm")

@@ -54,7 +54,7 @@ final class StoreWorker implements AutoCloseable {
         }
     }
 
-    void run(PlayerDatabase.DbWork task) {
+    void run(StoreWork task) {
         call(() -> {
             task.run();
             return null;

@@ -4,10 +4,12 @@ import me.wolfii.allthelogs.api.AllTheLogs;
 import me.wolfii.allthelogs.api.ChatEntry;
 import me.wolfii.allthelogs.api.ChatQuery;
 import me.wolfii.allthelogs.api.LogDatabase;
-import me.wolfii.haveiplayedwith.command.QueryMessages;
-import me.wolfii.haveiplayedwith.net.CraftyClient;
+import me.wolfii.haveiplayedwith.chat.ImportMessages;
+import me.wolfii.haveiplayedwith.crafty.CraftyNameHistory;
+import me.wolfii.haveiplayedwith.crafty.CraftyPlayer;
+import me.wolfii.haveiplayedwith.crafty.CraftyPlayerApi;
 import me.wolfii.haveiplayedwith.store.ImportProgress;
-import me.wolfii.haveiplayedwith.store.PlayerDatabase;
+import me.wolfii.haveiplayedwith.store.PlayerStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -25,8 +27,8 @@ public final class AllTheLogsImporter {
     private static final long SAVE_EVERY = 250;
     /** Most log lines hold no username, so throttle by time rather than by lines walked. */
     private static final long REPORT_INTERVAL_NANOS = 15_000_000_000L;
-    private final PlayerDatabase database;
-    private final CraftyClient crafty;
+    private final PlayerStore players;
+    private final CraftyPlayerApi crafty;
     private final ImportControls controls;
     private final ExecutorService worker = Executors.newSingleThreadExecutor(runnable -> {
         Thread thread = new Thread(runnable, "haveiplayedwith-import");
@@ -34,8 +36,8 @@ public final class AllTheLogsImporter {
         return thread;
     });
 
-    public AllTheLogsImporter(PlayerDatabase database, CraftyClient crafty, ImportControls controls) {
-        this.database = database;
+    public AllTheLogsImporter(PlayerStore players, CraftyPlayerApi crafty, ImportControls controls) {
+        this.players = players;
         this.crafty = crafty;
         this.controls = controls;
     }
@@ -46,10 +48,10 @@ public final class AllTheLogsImporter {
         }
         worker.execute(() -> {
             try {
-                Optional<ImportProgress> progress = database.importProgress(ImportProgress.SOURCE_ALLTHELOGS);
+                Optional<ImportProgress> progress = players.importProgress().get(ImportProgress.SOURCE_ALLTHELOGS);
                 progress.ifPresent(controls::save);
                 if (progress.isPresent() && ImportProgress.STATUS_RUNNING.equals(progress.get().status())) {
-                    controls.progress(QueryMessages.importResuming());
+                    controls.progress(ImportMessages.resuming());
                     runImport(progress.get());
                 }
             } finally {
@@ -60,13 +62,13 @@ public final class AllTheLogsImporter {
 
     public void startFromCommand() {
         if (!controls.trySchedule()) {
-            controls.chat(QueryMessages.importAlreadyRunning());
+            controls.chat(ImportMessages.alreadyRunning());
             return;
         }
         controls.clearStop();
         worker.execute(() -> {
             try {
-                Optional<ImportProgress> existing = database.importProgress(ImportProgress.SOURCE_ALLTHELOGS);
+                Optional<ImportProgress> existing = players.importProgress().get(ImportProgress.SOURCE_ALLTHELOGS);
                 ImportProgress start = existing
                     .filter(progress -> !ImportProgress.STATUS_DONE.equals(progress.status()))
                     .orElseGet(() -> new ImportProgress(
@@ -74,7 +76,7 @@ public final class AllTheLogsImporter {
                         existing.map(ImportProgress::silenced).orElse(controls.silenced())
                     ));
                 start = start.withStatus(ImportProgress.STATUS_RUNNING);
-                controls.chat(QueryMessages.importStarting());
+                controls.chat(ImportMessages.starting());
                 runImport(start);
             } finally {
                 controls.unschedule();
@@ -91,7 +93,7 @@ public final class AllTheLogsImporter {
             }
             LogDatabase logs = AllTheLogs.database();
             if (!logs.isOpen()) {
-                controls.progress(QueryMessages.importNotReady());
+                controls.progress(ImportMessages.notReady());
                 controls.save(start.withStatus(ImportProgress.STATUS_RUNNING));
                 return;
             }
@@ -148,10 +150,10 @@ public final class AllTheLogsImporter {
             controls.save(new ImportProgress(
                 ImportProgress.SOURCE_ALLTHELOGS, processed, total, lastTimestamp, skip, ImportProgress.STATUS_DONE, controls.silenced()
             ));
-            controls.chat(QueryMessages.importFinished(processed));
+            controls.chat(ImportMessages.finished(processed));
         } catch (Exception e) {
             LOGGER.warn("AllTheLogs import failed", e);
-            controls.chat(QueryMessages.importFailed());
+            controls.chat(ImportMessages.failed());
         }
     }
 
@@ -160,12 +162,12 @@ public final class AllTheLogsImporter {
         if (username.isEmpty()) {
             return;
         }
-        Optional<CraftyClient.Player> player = crafty.lookup(username.get());
+        Optional<CraftyPlayer> player = crafty.lookup(username.get());
         if (player.isEmpty() || !player.get().valid() || player.get().uuid() == null) {
             return;
         }
         Instant at = entry.timestamp().atZone(ZoneId.systemDefault()).toInstant();
-        CraftyClient.Player resolved = player.get();
+        CraftyPlayer resolved = player.get();
         boolean held;
         if (resolved.history().isEmpty()) {
             held = resolved.currentUsername() != null && resolved.currentUsername().equalsIgnoreCase(username.get());
@@ -175,7 +177,7 @@ public final class AllTheLogsImporter {
         if (!held) {
             return;
         }
-        database.recordImportedSighting(
+        players.recordImportedSighting(
             resolved.uuid(),
             username.get(),
             resolved.currentUsername(),
@@ -201,9 +203,9 @@ public final class AllTheLogsImporter {
 
     private void report(long processed, long total) {
         if (total > 0) {
-            controls.progress(QueryMessages.importProgress(processed, total));
+            controls.progress(ImportMessages.progress(processed, total));
         } else {
-            controls.progress(QueryMessages.importProgressMessages(processed));
+            controls.progress(ImportMessages.progressMessages(processed));
         }
     }
 }
