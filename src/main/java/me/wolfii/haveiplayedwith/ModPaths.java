@@ -5,7 +5,8 @@ import net.fabricmc.loader.api.FabricLoader;
 import java.nio.file.Path;
 
 /**
- * Instance-relative paths. The database lives in {@code .config/haveiplayedwith}.
+ * Instance-relative paths. The database lives in Fabric's config directory
+ * under {@code haveiplayedwith}.
  */
 public final class ModPaths {
     public static final String DATABASE_FILE_NAME = "players.mv";
@@ -13,12 +14,8 @@ public final class ModPaths {
     private ModPaths() {
     }
 
-    public static Path gameDirectory() {
-        return FabricLoader.getInstance().getGameDir();
-    }
-
     public static Path directory() {
-        return gameDirectory().resolve(".config").resolve("haveiplayedwith");
+        return FabricLoader.getInstance().getConfigDir().resolve("haveiplayedwith");
     }
 
     public static Path databaseFile() {
