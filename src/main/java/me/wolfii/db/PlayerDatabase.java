@@ -76,11 +76,16 @@ public final class PlayerDatabase implements AutoCloseable {
 		}
 	}
 
-	public void run(Runnable task) {
+	public void run(DbWork task) {
 		call(() -> {
 			task.run();
 			return null;
 		});
+	}
+
+	@FunctionalInterface
+	public interface DbWork {
+		void run() throws Exception;
 	}
 
 	public void runAsync(Runnable task) {

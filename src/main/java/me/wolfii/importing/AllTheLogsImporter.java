@@ -66,9 +66,6 @@ public final class AllTheLogsImporter {
 				running.set(false);
 			}
 		});
-		if (!running.get()) {
-			// startFromCommand already flipped running; the worker will clear it
-		}
 	}
 
 	private void runImport(ImportProgress start) {
@@ -189,7 +186,7 @@ public final class AllTheLogsImporter {
 		Minecraft client = Minecraft.getInstance();
 		client.execute(() -> {
 			if (client.player != null) {
-				client.player.displayClientMessage(message, false);
+				client.player.sendSystemMessage(message);
 			}
 		});
 	}
