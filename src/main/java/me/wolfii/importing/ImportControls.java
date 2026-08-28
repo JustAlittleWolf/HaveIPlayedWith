@@ -75,11 +75,11 @@ public final class ImportControls {
 
     public void stopFromCommand() {
         if (!scheduled.get()) {
-            chat(QueryMessages.importStatus("No AllTheLogs import is running."));
+            chat(QueryMessages.importNotRunning());
             return;
         }
         stopRequested.set(true);
-        chat(QueryMessages.importStatus("Stopping AllTheLogs import..."));
+        chat(QueryMessages.importStopping());
     }
 
     public void toggleSilenceFromCommand() {
@@ -89,25 +89,14 @@ public final class ImportControls {
             ? latest
             : database.importProgress(ImportProgress.SOURCE_ALLTHELOGS).orElse(latest);
         save(stored.withSilenced(next));
-        chat(QueryMessages.importStatus(next
-            ? "AllTheLogs import progress messages silenced."
-            : "AllTheLogs import progress messages enabled."));
+        chat(next ? QueryMessages.importSilenced() : QueryMessages.importUnsilenced());
     }
 
     public void notifyIfRunning() {
         if (!scheduled.get()) {
             return;
         }
-        ImportProgress progress = latest;
-        if (progress.total() > 0) {
-            progress(QueryMessages.importStatus(
-                "AllTheLogs import is still running (" + progress.processed() + "/" + progress.total() + ")."
-            ));
-        } else {
-            progress(QueryMessages.importStatus(
-                "AllTheLogs import is still running (" + progress.processed() + " messages)."
-            ));
-        }
+        progress(QueryMessages.importStillRunning(latest.processed(), latest.total()));
     }
 
     void save(ImportProgress progress) {
@@ -118,7 +107,7 @@ public final class ImportControls {
 
     void saveStopped(ImportProgress progress) {
         save(progress.withStatus(ImportProgress.STATUS_STOPPED));
-        chat(QueryMessages.importStatus("AllTheLogs import stopped (" + progress.processed() + " messages)."));
+        chat(QueryMessages.importStopped(progress.processed()));
     }
 
     void progress(Component message) {

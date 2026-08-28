@@ -100,6 +100,18 @@ class PlayerDatabaseTest {
     }
 
     @Test
+    void sameSessionIdCountsOnceAcrossServers() {
+        try (PlayerDatabase database = new PlayerDatabase(temp.resolve("players.mv"))) {
+            UUID uuid = UUID.randomUUID();
+            database.recordLivePlay(uuid, "Steve", LocalDate.of(2026, 8, 1), "live:boot", "hypixel.net");
+            database.recordLivePlay(uuid, "Steve", LocalDate.of(2026, 8, 1), "live:boot", "world/Survival");
+            PlayerSnapshot snapshot = database.get(uuid).orElseThrow();
+            assertEquals(1, snapshot.sessionCount());
+            assertEquals(2, snapshot.totalMinutes());
+        }
+    }
+
+    @Test
     void blankServerIdDoesNotCreateAServerRow() {
         try (PlayerDatabase database = new PlayerDatabase(temp.resolve("players.mv"))) {
             UUID uuid = UUID.randomUUID();

@@ -49,7 +49,7 @@ public final class AllTheLogsImporter {
                 Optional<ImportProgress> progress = database.importProgress(ImportProgress.SOURCE_ALLTHELOGS);
                 progress.ifPresent(controls::save);
                 if (progress.isPresent() && ImportProgress.STATUS_RUNNING.equals(progress.get().status())) {
-                    controls.progress(QueryMessages.importStatus("Resuming AllTheLogs import..."));
+                    controls.progress(QueryMessages.importResuming());
                     runImport(progress.get());
                 }
             } finally {
@@ -60,7 +60,7 @@ public final class AllTheLogsImporter {
 
     public void startFromCommand() {
         if (!controls.trySchedule()) {
-            controls.chat(QueryMessages.importStatus("AllTheLogs import is already running."));
+            controls.chat(QueryMessages.importAlreadyRunning());
             return;
         }
         controls.clearStop();
@@ -74,7 +74,7 @@ public final class AllTheLogsImporter {
                         existing.map(ImportProgress::silenced).orElse(controls.silenced())
                     ));
                 start = start.withStatus(ImportProgress.STATUS_RUNNING);
-                controls.chat(QueryMessages.importStatus("Starting AllTheLogs import in the background."));
+                controls.chat(QueryMessages.importStarting());
                 runImport(start);
             } finally {
                 controls.unschedule();
@@ -91,7 +91,7 @@ public final class AllTheLogsImporter {
             }
             LogDatabase logs = AllTheLogs.database();
             if (!logs.isOpen()) {
-                controls.progress(QueryMessages.importStatus("AllTheLogs is not ready yet. The import will retry next launch."));
+                controls.progress(QueryMessages.importNotReady());
                 controls.save(start.withStatus(ImportProgress.STATUS_RUNNING));
                 return;
             }
@@ -148,10 +148,10 @@ public final class AllTheLogsImporter {
             controls.save(new ImportProgress(
                 ImportProgress.SOURCE_ALLTHELOGS, processed, total, lastTimestamp, skip, ImportProgress.STATUS_DONE, controls.silenced()
             ));
-            controls.chat(QueryMessages.importStatus("AllTheLogs import finished (" + processed + " messages)."));
+            controls.chat(QueryMessages.importFinished(processed));
         } catch (Exception e) {
             LOGGER.warn("AllTheLogs import failed", e);
-            controls.chat(QueryMessages.importStatus("AllTheLogs import failed. It will resume next launch."));
+            controls.chat(QueryMessages.importFailed());
         }
     }
 
@@ -201,10 +201,9 @@ public final class AllTheLogsImporter {
 
     private void report(long processed, long total) {
         if (total > 0) {
-            int percent = (int) Math.min(100, (processed * 100) / total);
-            controls.progress(QueryMessages.importStatus("AllTheLogs import: " + processed + "/" + total + " (" + percent + "%)"));
+            controls.progress(QueryMessages.importProgress(processed, total));
         } else {
-            controls.progress(QueryMessages.importStatus("AllTheLogs import: " + processed + " messages..."));
+            controls.progress(QueryMessages.importProgressMessages(processed));
         }
     }
 }

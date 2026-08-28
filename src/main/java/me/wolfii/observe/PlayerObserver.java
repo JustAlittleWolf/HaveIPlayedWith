@@ -45,7 +45,8 @@ public final class PlayerObserver {
     private final ConcurrentHashMap<UUID, Long> creditedMinute = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<UUID, String> noticedThisMinute = new ConcurrentHashMap<>();
     private volatile long currentMinute = Long.MIN_VALUE;
-    private volatile String sessionId;
+    /** One id for this client run, assigned at boot and kept across join/disconnect. */
+    private final String sessionId = UUID.randomUUID().toString();
     private volatile String locationId;
     public PlayerObserver(PlayerDatabase database, MojangClient mojang) {
         this.database = database;
@@ -63,12 +64,8 @@ public final class PlayerObserver {
     }
 
     public void register() {
-        ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> {
-            sessionId = UUID.randomUUID().toString();
-            locationId = PlayLocations.current(client);
-        });
+        ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> locationId = PlayLocations.current(client));
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
-            sessionId = null;
             locationId = null;
             creditedMinute.clear();
             noticedThisMinute.clear();
@@ -92,29 +89,18 @@ public final class PlayerObserver {
             noticedThisMinute.clear();
             creditedMinute.values().removeIf(minute -> minute < epochMinute - CREDIT_MEMORY_MINUTES);
         }
-        String session = session();
         String serverId = location(client);
         LocalDate day = LocalDate.now();
         Set<UUID> seen = new HashSet<>();
         ClientPacketListener connection = client.getConnection();
         for (PlayerInfo info : connection.getListedOnlinePlayers()) {
-            offer(info.getProfile(), day, epochMinute, session, serverId, seen);
+            offer(info.getProfile(), day, epochMinute, sessionId, serverId, seen);
         }
         for (AbstractClientPlayer player : client.level.players()) {
-            offer(player.getGameProfile(), day, epochMinute, session, serverId, seen);
+            offer(player.getGameProfile(), day, epochMinute, sessionId, serverId, seen);
         }
         LocalPlayer self = client.player;
-        offer(self.getGameProfile(), day, epochMinute, session, serverId, seen);
-    }
-
-    private String session() {
-        String current = sessionId;
-        if (current != null) {
-            return current;
-        }
-        String fresh = UUID.randomUUID().toString();
-        sessionId = fresh;
-        return fresh;
+        offer(self.getGameProfile(), day, epochMinute, sessionId, serverId, seen);
     }
 
     private String location(Minecraft client) {
