@@ -6,8 +6,6 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import me.wolfii.haveiplayedwith.http.JsonHttp;
 import me.wolfii.haveiplayedwith.http.RateLimiter;
-import me.wolfii.haveiplayedwith.store.CraftyCache;
-import me.wolfii.haveiplayedwith.store.CraftyProfileStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -23,36 +21,14 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Wrapper for the Crafty.gg player search API. Cached, and limited to 140 requests per minute
- * (the API allows 150).
+ * Crafty.gg player search. Results stay in memory for the client run: an import walks
+ * millions of lines, so disk is the wrong place for this cache.
  */
 public final class CraftyPlayerApi {
     private static final Logger LOGGER = LoggerFactory.getLogger("haveiplayedwith");
     private static final String SEARCH = "https://api.crafty.gg/api/v2/players/?search=";
-    /** An import walks millions of lines, so keep the hottest names out of the database entirely. */
-    private static final int MAX_MEMORY_ENTRIES = 10_000;
-    private final CraftyProfileStore store;
     private final RateLimiter limiter = new RateLimiter(140, 1, TimeUnit.MINUTES);
     private final ConcurrentHashMap<String, CraftyPlayer> memory = new ConcurrentHashMap<>();
-
-    public CraftyPlayerApi(CraftyProfileStore store) {
-        this.store = store;
-    }
-
-    private static Optional<CraftyPlayer> fromCache(CraftyCache cache) {
-        if (!cache.valid()) {
-            return Optional.of(invalid());
-        }
-        if (cache.uuid() == null || cache.uuid().isBlank()) {
-            return Optional.of(invalid());
-        }
-        return Optional.of(new CraftyPlayer(
-            UUID.fromString(cache.uuid()),
-            cache.currentUsername(),
-            parseHistory(cache.usernamesJson()),
-            true
-        ));
-    }
 
     private static Optional<CraftyPlayer> parse(String body, String searched) {
         JsonObject root = JsonParser.parseString(body).getAsJsonObject();
@@ -116,37 +92,6 @@ public final class CraftyPlayerApi {
         return fallback;
     }
 
-    private static List<CraftyNameHistory.Entry> parseHistory(String json) {
-        List<CraftyNameHistory.Entry> history = new ArrayList<>();
-        if (json == null || json.isBlank()) {
-            return history;
-        }
-        JsonArray array = JsonParser.parseString(json).getAsJsonArray();
-        for (JsonElement element : array) {
-            JsonObject row = element.getAsJsonObject();
-            Instant changed = row.has("changed_at") && !row.get("changed_at").isJsonNull()
-                ? CraftyNameHistory.parseCraftyTime(row.get("changed_at").getAsString())
-                : null;
-            history.add(new CraftyNameHistory.Entry(row.get("username").getAsString(), changed));
-        }
-        return history;
-    }
-
-    private static String historyJson(List<CraftyNameHistory.Entry> history) {
-        JsonArray array = new JsonArray();
-        for (CraftyNameHistory.Entry entry : history) {
-            JsonObject row = new JsonObject();
-            row.addProperty("username", entry.username());
-            if (entry.changedAt() == null) {
-                row.add("changed_at", null);
-            } else {
-                row.addProperty("changed_at", entry.changedAt().toString());
-            }
-            array.add(row);
-        }
-        return array.toString();
-    }
-
     private static CraftyPlayer invalid() {
         return new CraftyPlayer(null, null, List.of(), false);
     }
@@ -157,23 +102,18 @@ public final class CraftyPlayerApi {
         if (remembered != null) {
             return Optional.of(remembered);
         }
-        Optional<CraftyPlayer> cached = store.get(key).flatMap(CraftyPlayerApi::fromCache);
-        if (cached.isPresent()) {
-            remember(key, cached.get());
-            return cached;
-        }
         Optional<CraftyPlayer> fetched = fetch(username);
-        fetched.ifPresent(player -> {
-            persist(key, player);
-            remember(key, player);
-        });
+        fetched.ifPresent(player -> memory.put(key, player));
         return fetched;
     }
 
-    private void remember(String key, CraftyPlayer player) {
-        if (memory.size() < MAX_MEMORY_ENTRIES) {
-            memory.put(key, player);
-        }
+    /** Test hook: skip the network and seed the in-memory cache. */
+    void remember(String username, CraftyPlayer player) {
+        memory.put(CraftyNameHistory.cacheKey(username), player);
+    }
+
+    int memorySize() {
+        return memory.size();
     }
 
     private Optional<CraftyPlayer> fetch(String username) {
@@ -201,15 +141,5 @@ public final class CraftyPlayerApi {
             LOGGER.debug("Crafty lookup failed for {}", username, e);
             return Optional.empty();
         }
-    }
-
-    private void persist(String key, CraftyPlayer player) {
-        store.put(key, new CraftyCache(
-            player.uuid() == null ? "" : player.uuid().toString(),
-            player.currentUsername() == null ? "" : player.currentUsername(),
-            historyJson(player.history()),
-            player.valid(),
-            Instant.now()
-        ));
     }
 }
