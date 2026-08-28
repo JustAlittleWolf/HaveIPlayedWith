@@ -3,9 +3,9 @@ package me.wolfii.haveiplayedwith.store;
 import java.util.Objects;
 
 /**
- * JSON shapes stored in MVStore maps. Field names are part of the on-disk format.
- * String fields are never stored as JSON null: absent values are empty strings, and
- * {@code noteTakenAt} uses {@code 0} when there is no note.
+ * Row shapes persisted in SmallSQL. String fields are never stored as SQL NULL:
+ * absent values are empty strings, and {@code noteTakenAt} uses {@code 0} when there
+ * is no note.
  */
 final class StoreRows {
     private StoreRows() {

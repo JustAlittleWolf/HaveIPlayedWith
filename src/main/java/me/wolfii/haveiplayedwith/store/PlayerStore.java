@@ -4,23 +4,21 @@ import java.nio.file.Path;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
 /**
- * Single-file store for players you've been around, backed by H2 MVStore (pure Java, ~350 KB).
- * Each logical write is committed from the database thread, not the client thread.
+ * Player store backed by SmallSQL (pure Java JDBC, ~340 KB). Each logical write is
+ * committed from the database thread, not the client thread.
  */
 public final class PlayerStore implements AutoCloseable {
     private final StoreSession session;
     private final MojangProfileStore mojangProfiles;
     private final ImportProgressStore importProgress;
 
-    public PlayerStore(Path file) {
-        this.session = StoreSession.open(file);
+    public PlayerStore(Path directory) {
+        this.session = StoreSession.open(directory);
         this.mojangProfiles = new MojangProfileStore(session);
         this.importProgress = new ImportProgressStore(session);
     }
@@ -50,21 +48,18 @@ public final class PlayerStore implements AutoCloseable {
             return 0L;
         }
         return session.call(() -> {
-            String raw = session.playSessions.get(StoreKeys.session(uuid, sessionId));
-            if (raw == null || raw.isBlank()) {
-                return 0L;
-            }
-            return Long.parseLong(raw);
+            Long minutes = session.db.sessionMinutes(uuid, sessionId);
+            return minutes == null ? 0L : minutes;
         });
     }
 
     public void setNote(UUID uuid, String username, String note) {
         session.run(() -> {
             ensurePlayerRow(uuid, username);
-            StoreRows.PlayerRow row = playerRow(uuid);
+            StoreRows.PlayerRow row = session.db.player(uuid);
             String cleaned = blankToEmpty(note);
             long takenAt = cleaned.isEmpty() ? 0L : Instant.now().toEpochMilli();
-            putPlayer(uuid, row.withNote(cleaned, takenAt));
+            session.db.putPlayer(uuid, row.withNote(cleaned, takenAt));
         });
     }
 
@@ -97,13 +92,13 @@ public final class PlayerStore implements AutoCloseable {
             }
             touchUsername(uuid, seenUsername, seenAt);
             addSession(uuid, sessionId);
-            ensurePlayDay(uuid, day);
+            session.db.putPlayDayIfAbsent(uuid, day);
         });
     }
 
     public Optional<String> applyMojangUsername(UUID uuid, String username, Instant fetchedAt) {
         return session.call(() -> {
-            if (playerRow(uuid) == null) {
+            if (session.db.player(uuid) == null) {
                 return Optional.empty();
             }
             Optional<String> previousName = previousSeenNameIfDifferent(uuid, username);
@@ -119,34 +114,20 @@ public final class PlayerStore implements AutoCloseable {
     }
 
     private List<PlayerSnapshot> findByNameOnThread(String name) {
-        String raw = session.nameIndex.get(StoreKeys.nameIndex(name));
-        if (raw == null) {
-            return List.of();
-        }
         List<PlayerSnapshot> snapshots = new ArrayList<>();
-        for (String id : session.gson().fromJson(raw, String[].class)) {
-            loadSnapshot(UUID.fromString(id)).ifPresent(snapshots::add);
+        for (UUID uuid : session.db.findNameIndex(name)) {
+            loadSnapshot(uuid).ifPresent(snapshots::add);
         }
         return snapshots;
     }
 
     private Optional<PlayerSnapshot> loadSnapshot(UUID uuid) {
-        StoreRows.PlayerRow row = playerRow(uuid);
+        StoreRows.PlayerRow row = session.db.player(uuid);
         if (row == null) {
             return Optional.empty();
         }
         List<SeenName> names = loadHistory(uuid);
-        List<ServerPlay> servers = new ArrayList<>();
-        String prefix = StoreKeys.prefix(uuid);
-        Iterator<String> serverKeys = session.playServers.keyIterator(prefix);
-        while (serverKeys.hasNext()) {
-            String key = serverKeys.next();
-            if (!key.startsWith(prefix)) {
-                break;
-            }
-            servers.add(new ServerPlay(key.substring(prefix.length()), Long.parseLong(session.playServers.get(key))));
-        }
-        servers.sort(Comparator.comparingLong(ServerPlay::minutes).reversed().thenComparing(ServerPlay::serverId));
+        List<ServerPlay> servers = session.db.listServers(uuid);
         Optional<String> note = Optional.of(row.note()).filter(value -> !value.isBlank());
         Optional<Instant> noteTakenAt = note.isEmpty() || row.noteTakenAt() == 0L
             ? Optional.empty()
@@ -158,8 +139,8 @@ public final class PlayerStore implements AutoCloseable {
             noteTakenAt,
             row.totalMinutes(),
             row.sessionCount(),
-            StoreKeys.countPrefix(session.playDays, prefix),
-            lastPlayedBefore(prefix, LocalDate.now()),
+            session.db.countPlayDays(uuid),
+            session.db.lastPlayedBefore(uuid, LocalDate.now()),
             names,
             servers
         ));
@@ -167,17 +148,9 @@ public final class PlayerStore implements AutoCloseable {
 
     private List<SeenName> loadHistory(UUID uuid) {
         List<SeenName> names = new ArrayList<>();
-        String prefix = StoreKeys.prefix(uuid);
-        Iterator<String> keys = session.history.keyIterator(prefix);
-        while (keys.hasNext()) {
-            String key = keys.next();
-            if (!key.startsWith(prefix)) {
-                break;
-            }
-            StoreRows.HistoryRow seen = session.gson().fromJson(session.history.get(key), StoreRows.HistoryRow.class);
+        for (StoreRows.HistoryRow seen : session.db.listHistory(uuid)) {
             names.add(new SeenName(seen.username(), Instant.ofEpochMilli(seen.lastSeen())));
         }
-        names.sort(Comparator.comparing(SeenName::lastSeen).reversed());
         return names;
     }
 
@@ -196,120 +169,70 @@ public final class PlayerStore implements AutoCloseable {
         return Optional.of(latest);
     }
 
-    private Optional<LocalDate> lastPlayedBefore(String prefix, LocalDate excluded) {
-        LocalDate latest = null;
-        Iterator<String> keys = session.playDays.keyIterator(prefix);
-        while (keys.hasNext()) {
-            String key = keys.next();
-            if (!key.startsWith(prefix)) {
-                break;
-            }
-            LocalDate day = StoreKeys.playDayOf(key, prefix);
-            if (day.equals(excluded)) {
-                continue;
-            }
-            if (latest == null || day.isAfter(latest)) {
-                latest = day;
-            }
-        }
-        return Optional.ofNullable(latest);
-    }
-
-    private StoreRows.PlayerRow playerRow(UUID uuid) {
-        String raw = session.players.get(StoreKeys.uuid(uuid));
-        return raw == null ? null : session.gson().fromJson(raw, StoreRows.PlayerRow.class);
-    }
-
-    private void putPlayer(UUID uuid, StoreRows.PlayerRow row) {
-        session.players.put(StoreKeys.uuid(uuid), session.gson().toJson(row));
-    }
-
     private void ensurePlayerRow(UUID uuid, String username) {
-        if (playerRow(uuid) != null) {
+        if (session.db.player(uuid) != null) {
             return;
         }
-        putPlayer(uuid, new StoreRows.PlayerRow(username, "", 0L, 0, 0));
-        indexName(uuid, username);
+        session.db.putPlayer(uuid, new StoreRows.PlayerRow(username, "", 0L, 0, 0));
+        session.db.indexName(uuid, username);
     }
 
     private void setCurrentUsername(UUID uuid, String username) {
-        StoreRows.PlayerRow row = playerRow(uuid);
+        StoreRows.PlayerRow row = session.db.player(uuid);
         if (row == null) {
             return;
         }
-        putPlayer(uuid, row.withUsername(username));
-        indexName(uuid, username);
+        session.db.putPlayer(uuid, row.withUsername(username));
+        session.db.indexName(uuid, username);
     }
 
     private void touchUsername(UUID uuid, String username, Instant seenAt) {
-        String key = StoreKeys.history(uuid, username);
-        String raw = session.history.get(key);
+        StoreRows.HistoryRow existing = session.db.history(uuid, username);
         long millis = seenAt.toEpochMilli();
-        if (raw != null) {
-            StoreRows.HistoryRow existing = session.gson().fromJson(raw, StoreRows.HistoryRow.class);
+        if (existing != null) {
             if (existing.lastSeen() >= millis) {
-                indexName(uuid, existing.username());
+                session.db.indexName(uuid, existing.username());
                 return;
             }
         }
-        session.history.put(key, session.gson().toJson(new StoreRows.HistoryRow(username, millis)));
-        indexName(uuid, username);
-    }
-
-    private void indexName(UUID uuid, String username) {
-        String key = StoreKeys.nameIndex(username);
-        String id = uuid.toString();
-        String raw = session.nameIndex.get(key);
-        List<String> ids = raw == null ? new ArrayList<>() : new ArrayList<>(List.of(session.gson().fromJson(raw, String[].class)));
-        if (!ids.contains(id)) {
-            ids.add(id);
-            session.nameIndex.put(key, session.gson().toJson(ids));
-        }
+        session.db.putHistory(uuid, new StoreRows.HistoryRow(username, millis));
+        session.db.indexName(uuid, username);
     }
 
     private void addSession(UUID uuid, String sessionId) {
-        String key = StoreKeys.session(uuid, sessionId);
-        if (session.playSessions.containsKey(key)) {
+        if (session.db.hasSession(uuid, sessionId)) {
             return;
         }
-        session.playSessions.put(key, "0");
-        StoreRows.PlayerRow row = playerRow(uuid);
-        putPlayer(uuid, row.plusSession());
+        session.db.putSession(uuid, sessionId, 0L);
+        StoreRows.PlayerRow row = session.db.player(uuid);
+        session.db.putPlayer(uuid, row.plusSession());
     }
 
     private void addSessionMinute(UUID uuid, String sessionId) {
-        String key = StoreKeys.session(uuid, sessionId);
-        String raw = session.playSessions.get(key);
+        Long raw = session.db.sessionMinutes(uuid, sessionId);
         if (raw == null) {
-            session.playSessions.put(key, "1");
-            StoreRows.PlayerRow row = playerRow(uuid);
-            putPlayer(uuid, row.plusSession());
+            session.db.putSession(uuid, sessionId, 1L);
+            StoreRows.PlayerRow row = session.db.player(uuid);
+            session.db.putPlayer(uuid, row.plusSession());
             return;
         }
-        session.playSessions.put(key, Long.toString(Long.parseLong(raw) + 1));
+        session.db.putSession(uuid, sessionId, raw + 1);
     }
 
     private void addMinute(UUID uuid, LocalDate day, String serverId) {
-        ensurePlayDay(uuid, day);
-        String key = StoreKeys.playDay(uuid, day);
-        long minutes = Long.parseLong(session.playDays.get(key)) + 1;
-        session.playDays.put(key, Long.toString(minutes));
+        session.db.putPlayDayIfAbsent(uuid, day);
+        long minutes = session.db.playDayMinutes(uuid, day) + 1;
+        session.db.putPlayDay(uuid, day, minutes);
         addServerMinute(uuid, serverId);
-        StoreRows.PlayerRow row = playerRow(uuid);
-        putPlayer(uuid, row.plusMinute());
+        StoreRows.PlayerRow row = session.db.player(uuid);
+        session.db.putPlayer(uuid, row.plusMinute());
     }
 
     private void addServerMinute(UUID uuid, String serverId) {
         if (serverId == null || serverId.isBlank()) {
             return;
         }
-        String key = StoreKeys.server(uuid, serverId);
-        String raw = session.playServers.get(key);
-        long minutes = raw == null ? 1 : Long.parseLong(raw) + 1;
-        session.playServers.put(key, Long.toString(minutes));
-    }
-
-    private void ensurePlayDay(UUID uuid, LocalDate day) {
-        session.playDays.putIfAbsent(StoreKeys.playDay(uuid, day), "0");
+        Long raw = session.db.serverMinutes(uuid, serverId);
+        session.db.putServer(uuid, serverId, raw == null ? 1 : raw + 1);
     }
 }

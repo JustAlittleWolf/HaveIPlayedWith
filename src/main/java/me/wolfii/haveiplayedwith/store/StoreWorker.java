@@ -1,9 +1,10 @@
 package me.wolfii.haveiplayedwith.store;
 
-import org.h2.mvstore.MVStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.sql.Connection;
+import java.sql.SQLException;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -20,10 +21,10 @@ final class StoreWorker implements AutoCloseable {
         thread.setDaemon(true);
         return thread;
     });
-    private final MVStore store;
+    private final Connection connection;
 
-    StoreWorker(MVStore store) {
-        this.store = store;
+    StoreWorker(Connection connection) {
+        this.connection = connection;
     }
 
     private static RuntimeException unwrap(ExecutionException e) {
@@ -39,10 +40,14 @@ final class StoreWorker implements AutoCloseable {
             return worker.submit(() -> {
                 try {
                     T result = task.call();
-                    store.commit();
+                    connection.commit();
                     return result;
                 } catch (Exception e) {
-                    store.rollback();
+                    try {
+                        connection.rollback();
+                    } catch (SQLException rollback) {
+                        e.addSuppressed(rollback);
+                    }
                     throw e;
                 }
             }).get();
@@ -64,7 +69,7 @@ final class StoreWorker implements AutoCloseable {
     @Override
     public void close() {
         try {
-            run(store::commit);
+            run(connection::commit);
         } catch (RuntimeException e) {
             LOGGER.warn("Failed to commit HaveIPlayedWith database", e);
         }
@@ -73,10 +78,20 @@ final class StoreWorker implements AutoCloseable {
             if (!worker.awaitTermination(5, TimeUnit.SECONDS)) {
                 worker.shutdownNow();
             }
-            store.close();
+            connection.close();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            store.closeImmediately();
+            closeQuietly();
+        } catch (SQLException e) {
+            LOGGER.warn("Failed to close HaveIPlayedWith database", e);
+        }
+    }
+
+    private void closeQuietly() {
+        try {
+            connection.close();
+        } catch (SQLException e) {
+            LOGGER.warn("Failed to close HaveIPlayedWith database", e);
         }
     }
 }

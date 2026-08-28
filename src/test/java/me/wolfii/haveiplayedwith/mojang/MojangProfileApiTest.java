@@ -20,7 +20,7 @@ class MojangProfileApiTest {
 
     @Test
     void needsFetchOnFreshNameMismatch() {
-        try (PlayerStore players = new PlayerStore(temp.resolve("players.mv"))) {
+        try (PlayerStore players = new PlayerStore(temp.resolve("players"))) {
             MojangProfileApi mojang = new MojangProfileApi(players.mojangProfiles());
             UUID uuid = UUID.fromString("61699b2e-d327-4a01-9f1e-0ea8c3f06bc6");
             players.mojangProfiles().putUuid(uuid, "Steve", Instant.now());
@@ -34,7 +34,7 @@ class MojangProfileApiTest {
 
     @Test
     void cachedUuidMissSkipsFetchUntilStale() {
-        try (PlayerStore players = new PlayerStore(temp.resolve("players.mv"))) {
+        try (PlayerStore players = new PlayerStore(temp.resolve("players"))) {
             MojangProfileApi mojang = new MojangProfileApi(players.mojangProfiles());
             UUID uuid = UUID.fromString("00000000-0000-0000-0000-000000000001");
             players.mojangProfiles().putUuid(uuid, "", Instant.now());
@@ -52,7 +52,7 @@ class MojangProfileApiTest {
     @Test
     void rememberCurrentPersistsBothDirections() {
         UUID uuid = UUID.fromString("61699b2e-d327-4a01-9f1e-0ea8c3f06bc6");
-        Path file = temp.resolve("players.mv");
+        Path file = temp.resolve("players");
         try (PlayerStore players = new PlayerStore(file)) {
             MojangProfileApi mojang = new MojangProfileApi(players.mojangProfiles());
             mojang.rememberCurrent(uuid, "Alex");
