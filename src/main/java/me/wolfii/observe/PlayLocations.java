@@ -4,10 +4,12 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientPacketListener;
 import net.minecraft.client.multiplayer.ServerData;
 import net.minecraft.client.server.IntegratedServer;
+import net.minecraft.world.level.storage.LevelResource;
 import net.minecraft.world.level.storage.WorldData;
 
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
+import java.nio.file.Path;
 import java.util.Locale;
 
 /**
@@ -31,14 +33,19 @@ public final class PlayLocations {
 				}
 			}
 		}
-		ServerData remote = client.getCurrentServer();
+		String remote = remoteFrom(client.getCurrentServer());
 		if (remote != null) {
-			String address = addressOf(remote);
-			if (address != null) {
-				return remoteServer(address);
-			}
+			return remote;
 		}
-		return fromConnection(client.getConnection());
+		ClientPacketListener connection = client.getConnection();
+		if (connection != null) {
+			remote = remoteFrom(connection.getServerData());
+			if (remote != null) {
+				return remote;
+			}
+			return fromConnection(connection);
+		}
+		return null;
 	}
 
 	public static String localWorld(String worldName) {
@@ -85,8 +92,17 @@ public final class PlayLocations {
 				return name;
 			}
 		}
-		String id = server.getLevelIdName();
-		return id == null || id.isBlank() ? null : id;
+		Path root = server.getWorldPath(LevelResource.ROOT);
+		Path fileName = root == null ? null : root.getFileName();
+		return fileName == null ? null : fileName.toString();
+	}
+
+	private static String remoteFrom(ServerData remote) {
+		if (remote == null) {
+			return null;
+		}
+		String address = addressOf(remote);
+		return address == null ? null : remoteServer(address);
 	}
 
 	private static String addressOf(ServerData remote) {
@@ -100,9 +116,6 @@ public final class PlayLocations {
 	}
 
 	private static String fromConnection(ClientPacketListener connection) {
-		if (connection == null) {
-			return null;
-		}
 		SocketAddress address = connection.getConnection().getRemoteAddress();
 		if (address instanceof InetSocketAddress inet) {
 			String host = inet.getHostString();
