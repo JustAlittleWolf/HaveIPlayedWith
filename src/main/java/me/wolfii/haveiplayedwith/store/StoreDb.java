@@ -1,22 +1,30 @@
 package me.wolfii.haveiplayedwith.store;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.sql.Connection;
+import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.time.Instant;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
+import java.util.Properties;
 import java.util.UUID;
+import java.util.concurrent.Callable;
 
 /**
- * SmallSQL tables for players, sightings, and caches. String columns store empty
- * strings instead of SQL NULL.
+ * SmallSQL connection, schema, and queries. String columns store empty strings
+ * instead of SQL NULL. All access goes through {@link StoreWorker}.
  */
-final class StoreDb {
+final class StoreDb implements AutoCloseable {
+    private static final String DRIVER = "smallsql.database.SSDriver";
     private static final String[] TABLES = {
         """
         CREATE TABLE players (
@@ -96,269 +104,326 @@ final class StoreDb {
         """
     };
 
+    private final StoreWorker worker;
     private final Connection connection;
 
-    StoreDb(Connection connection) {
+    private StoreDb(StoreWorker worker, Connection connection) {
+        this.worker = worker;
         this.connection = connection;
     }
 
-    void createTables() {
-        for (String sql : TABLES) {
-            createTable(sql);
+    static StoreDb open(Path directory) {
+        try {
+            Files.createDirectories(directory.getParent());
+            Class.forName(DRIVER);
+            Properties properties = new Properties();
+            properties.setProperty("create", "true");
+            Connection connection = DriverManager.getConnection("jdbc:smallsql:" + directory.toAbsolutePath(), properties);
+            connection.setAutoCommit(false);
+            StoreDb db = new StoreDb(new StoreWorker(connection), connection);
+            db.createTables();
+            connection.commit();
+            return db;
+        } catch (Exception e) {
+            throw new IllegalStateException("Failed to open HaveIPlayedWith database at " + directory, e);
         }
     }
 
-    StoreRows.PlayerRow player(UUID uuid) {
-        return queryOne(
+    <T> T call(Callable<T> task) {
+        return worker.call(task);
+    }
+
+    void run(StoreWork task) {
+        worker.run(task);
+    }
+
+    @Override
+    public void close() {
+        worker.close();
+    }
+
+    boolean hasPlayer(UUID uuid) {
+        return exists("SELECT player_uuid FROM players WHERE player_uuid = ?", id(uuid));
+    }
+
+    void ensurePlayer(UUID uuid, String username) {
+        if (hasPlayer(uuid)) {
+            return;
+        }
+        execute(
+            "INSERT INTO players (player_uuid, current_username, note, note_taken_at, total_minutes, session_count) VALUES (?,?,?,?,?,?)",
+            id(uuid), username, "", 0L, 0L, 0
+        );
+        indexName(uuid, username);
+    }
+
+    void setNote(UUID uuid, String note, long noteTakenAt) {
+        execute("UPDATE players SET note = ?, note_taken_at = ? WHERE player_uuid = ?", note, noteTakenAt, id(uuid));
+    }
+
+    void setCurrentUsername(UUID uuid, String username) {
+        execute("UPDATE players SET current_username = ? WHERE player_uuid = ?", username, id(uuid));
+        indexName(uuid, username);
+    }
+
+    void touchUsername(UUID uuid, String username, Instant seenAt) {
+        long millis = seenAt.toEpochMilli();
+        Long lastSeen = queryOne(
+            "SELECT last_seen FROM username_history WHERE player_uuid = ? AND username_lower = ?",
+            rs -> rs.getLong(1),
+            id(uuid),
+            lower(username)
+        );
+        if (lastSeen != null && lastSeen >= millis) {
+            indexName(uuid, username);
+            return;
+        }
+        upsert(
+            "UPDATE username_history SET username = ?, last_seen = ? WHERE player_uuid = ? AND username_lower = ?",
+            List.of(username, millis, id(uuid), lower(username)),
+            "INSERT INTO username_history (player_uuid, username_lower, username, last_seen) VALUES (?,?,?,?)",
+            List.of(id(uuid), lower(username), username, millis)
+        );
+        indexName(uuid, username);
+    }
+
+    Optional<String> previousSeenNameIfDifferent(UUID uuid, String username) {
+        List<SeenName> names = listHistory(uuid);
+        if (names.isEmpty() || names.getFirst().username().equalsIgnoreCase(username)) {
+            return Optional.empty();
+        }
+        return Optional.of(names.getFirst().username());
+    }
+
+    List<PlayerSnapshot> findByName(String name) {
+        List<PlayerSnapshot> snapshots = new ArrayList<>();
+        for (UUID uuid : queryAll(
+            "SELECT player_uuid FROM name_index WHERE username_lower = ?",
+            rs -> UUID.fromString(rs.getString(1)),
+            lower(name)
+        )) {
+            snapshot(uuid).ifPresent(snapshots::add);
+        }
+        return snapshots;
+    }
+
+    Optional<PlayerSnapshot> snapshot(UUID uuid) {
+        PlayerFields row = queryOne(
             "SELECT current_username, note, note_taken_at, total_minutes, session_count FROM players WHERE player_uuid = ?",
-            rs -> new StoreRows.PlayerRow(
+            rs -> new PlayerFields(
                 rs.getString(1),
                 emptyIfNull(rs.getString(2)),
                 rs.getLong(3),
                 rs.getLong(4),
                 rs.getInt(5)
             ),
-            StoreKeys.uuid(uuid)
+            id(uuid)
         );
-    }
-
-    void putPlayer(UUID uuid, StoreRows.PlayerRow row) {
-        upsert(
-            "SELECT player_uuid FROM players WHERE player_uuid = ?",
-            "UPDATE players SET current_username = ?, note = ?, note_taken_at = ?, total_minutes = ?, session_count = ? WHERE player_uuid = ?",
-            "INSERT INTO players (player_uuid, current_username, note, note_taken_at, total_minutes, session_count) VALUES (?,?,?,?,?,?)",
-            List.of(StoreKeys.uuid(uuid)),
-            List.of(row.currentUsername(), row.note(), row.noteTakenAt(), row.totalMinutes(), row.sessionCount(), StoreKeys.uuid(uuid)),
-            List.of(StoreKeys.uuid(uuid), row.currentUsername(), row.note(), row.noteTakenAt(), row.totalMinutes(), row.sessionCount())
-        );
-    }
-
-    StoreRows.HistoryRow history(UUID uuid, String username) {
-        return queryOne(
-            "SELECT username, last_seen FROM username_history WHERE player_uuid = ? AND username_lower = ?",
-            rs -> new StoreRows.HistoryRow(rs.getString(1), rs.getLong(2)),
-            StoreKeys.uuid(uuid),
-            StoreKeys.nameIndex(username)
-        );
-    }
-
-    void putHistory(UUID uuid, StoreRows.HistoryRow row) {
-        upsert(
-            "SELECT player_uuid FROM username_history WHERE player_uuid = ? AND username_lower = ?",
-            "UPDATE username_history SET username = ?, last_seen = ? WHERE player_uuid = ? AND username_lower = ?",
-            "INSERT INTO username_history (player_uuid, username_lower, username, last_seen) VALUES (?,?,?,?)",
-            List.of(StoreKeys.uuid(uuid), StoreKeys.nameIndex(row.username())),
-            List.of(row.username(), row.lastSeen(), StoreKeys.uuid(uuid), StoreKeys.nameIndex(row.username())),
-            List.of(StoreKeys.uuid(uuid), StoreKeys.nameIndex(row.username()), row.username(), row.lastSeen())
-        );
-    }
-
-    List<StoreRows.HistoryRow> listHistory(UUID uuid) {
-        List<StoreRows.HistoryRow> rows = queryAll(
-            "SELECT username, last_seen FROM username_history WHERE player_uuid = ?",
-            rs -> new StoreRows.HistoryRow(rs.getString(1), rs.getLong(2)),
-            StoreKeys.uuid(uuid)
-        );
-        rows.sort(Comparator.comparingLong(StoreRows.HistoryRow::lastSeen).reversed());
-        return rows;
-    }
-
-    List<UUID> findNameIndex(String username) {
-        return queryAll(
-            "SELECT player_uuid FROM name_index WHERE username_lower = ?",
-            rs -> UUID.fromString(rs.getString(1)),
-            StoreKeys.nameIndex(username)
-        );
-    }
-
-    void indexName(UUID uuid, String username) {
-        String lower = StoreKeys.nameIndex(username);
-        String id = StoreKeys.uuid(uuid);
-        if (exists("SELECT player_uuid FROM name_index WHERE username_lower = ? AND player_uuid = ?", lower, id)) {
-            return;
+        if (row == null) {
+            return Optional.empty();
         }
-        execute("INSERT INTO name_index (username_lower, player_uuid) VALUES (?,?)", lower, id);
-    }
-
-    Long playDayMinutes(UUID uuid, LocalDate day) {
-        return queryOne(
-            "SELECT minutes FROM play_days WHERE player_uuid = ? AND play_day = ?",
-            rs -> rs.getLong(1),
-            StoreKeys.uuid(uuid),
-            day.toString()
-        );
-    }
-
-    void putPlayDayIfAbsent(UUID uuid, LocalDate day) {
-        if (playDayMinutes(uuid, day) != null) {
-            return;
-        }
-        execute("INSERT INTO play_days (player_uuid, play_day, minutes) VALUES (?,?,?)", StoreKeys.uuid(uuid), day.toString(), 0L);
-    }
-
-    void putPlayDay(UUID uuid, LocalDate day, long minutes) {
-        upsert(
-            "SELECT player_uuid FROM play_days WHERE player_uuid = ? AND play_day = ?",
-            "UPDATE play_days SET minutes = ? WHERE player_uuid = ? AND play_day = ?",
-            "INSERT INTO play_days (player_uuid, play_day, minutes) VALUES (?,?,?)",
-            List.of(StoreKeys.uuid(uuid), day.toString()),
-            List.of(minutes, StoreKeys.uuid(uuid), day.toString()),
-            List.of(StoreKeys.uuid(uuid), day.toString(), minutes)
-        );
-    }
-
-    int countPlayDays(UUID uuid) {
-        Integer count = queryOne(
-            "SELECT COUNT(*) FROM play_days WHERE player_uuid = ?",
-            rs -> rs.getInt(1),
-            StoreKeys.uuid(uuid)
-        );
-        return count == null ? 0 : count;
-    }
-
-    Optional<LocalDate> lastPlayedBefore(UUID uuid, LocalDate excluded) {
-        String latest = queryOne(
-            "SELECT MAX(play_day) FROM play_days WHERE player_uuid = ? AND play_day <> ?",
-            rs -> rs.getString(1),
-            StoreKeys.uuid(uuid),
-            excluded.toString()
-        );
-        return latest == null || latest.isBlank() ? Optional.empty() : Optional.of(LocalDate.parse(latest));
+        Optional<String> note = Optional.of(row.note()).filter(value -> !value.isBlank());
+        Optional<Instant> noteTakenAt = note.isEmpty() || row.noteTakenAt() == 0L
+            ? Optional.empty()
+            : Optional.of(Instant.ofEpochMilli(row.noteTakenAt()));
+        return Optional.of(new PlayerSnapshot(
+            uuid,
+            row.currentUsername(),
+            note,
+            noteTakenAt,
+            row.totalMinutes(),
+            row.sessionCount(),
+            countPlayDays(uuid),
+            lastPlayedBefore(uuid, LocalDate.now()),
+            listHistory(uuid),
+            listServers(uuid)
+        ));
     }
 
     Long sessionMinutes(UUID uuid, String sessionId) {
         return queryOne(
             "SELECT minutes FROM play_sessions WHERE player_uuid = ? AND session_id = ?",
             rs -> rs.getLong(1),
-            StoreKeys.uuid(uuid),
+            id(uuid),
             sessionId
         );
     }
 
-    boolean hasSession(UUID uuid, String sessionId) {
-        return sessionMinutes(uuid, sessionId) != null;
+    void addSession(UUID uuid, String sessionId) {
+        if (sessionMinutes(uuid, sessionId) != null) {
+            return;
+        }
+        execute("INSERT INTO play_sessions (player_uuid, session_id, minutes) VALUES (?,?,?)", id(uuid), sessionId, 0L);
+        execute("UPDATE players SET session_count = session_count + 1 WHERE player_uuid = ?", id(uuid));
     }
 
-    void putSession(UUID uuid, String sessionId, long minutes) {
-        upsert(
-            "SELECT player_uuid FROM play_sessions WHERE player_uuid = ? AND session_id = ?",
-            "UPDATE play_sessions SET minutes = ? WHERE player_uuid = ? AND session_id = ?",
-            "INSERT INTO play_sessions (player_uuid, session_id, minutes) VALUES (?,?,?)",
-            List.of(StoreKeys.uuid(uuid), sessionId),
-            List.of(minutes, StoreKeys.uuid(uuid), sessionId),
-            List.of(StoreKeys.uuid(uuid), sessionId, minutes)
-        );
+    void addSessionMinute(UUID uuid, String sessionId) {
+        if (execute("UPDATE play_sessions SET minutes = minutes + 1 WHERE player_uuid = ? AND session_id = ?", id(uuid), sessionId) > 0) {
+            return;
+        }
+        execute("INSERT INTO play_sessions (player_uuid, session_id, minutes) VALUES (?,?,?)", id(uuid), sessionId, 1L);
+        execute("UPDATE players SET session_count = session_count + 1 WHERE player_uuid = ?", id(uuid));
     }
 
-    Long serverMinutes(UUID uuid, String serverId) {
-        return queryOne(
-            "SELECT minutes FROM play_servers WHERE player_uuid = ? AND server_id = ?",
-            rs -> rs.getLong(1),
-            StoreKeys.uuid(uuid),
-            serverId
-        );
+    void addMinute(UUID uuid, LocalDate day, String serverId) {
+        if (execute("UPDATE play_days SET minutes = minutes + 1 WHERE player_uuid = ? AND play_day = ?", id(uuid), day.toString()) == 0) {
+            execute("INSERT INTO play_days (player_uuid, play_day, minutes) VALUES (?,?,?)", id(uuid), day.toString(), 1L);
+        }
+        addServerMinute(uuid, serverId);
+        execute("UPDATE players SET total_minutes = total_minutes + 1 WHERE player_uuid = ?", id(uuid));
     }
 
-    void putServer(UUID uuid, String serverId, long minutes) {
-        upsert(
-            "SELECT player_uuid FROM play_servers WHERE player_uuid = ? AND server_id = ?",
-            "UPDATE play_servers SET minutes = ? WHERE player_uuid = ? AND server_id = ?",
-            "INSERT INTO play_servers (player_uuid, server_id, minutes) VALUES (?,?,?)",
-            List.of(StoreKeys.uuid(uuid), serverId),
-            List.of(minutes, StoreKeys.uuid(uuid), serverId),
-            List.of(StoreKeys.uuid(uuid), serverId, minutes)
-        );
+    void ensurePlayDay(UUID uuid, LocalDate day) {
+        if (exists("SELECT player_uuid FROM play_days WHERE player_uuid = ? AND play_day = ?", id(uuid), day.toString())) {
+            return;
+        }
+        execute("INSERT INTO play_days (player_uuid, play_day, minutes) VALUES (?,?,?)", id(uuid), day.toString(), 0L);
     }
 
-    List<ServerPlay> listServers(UUID uuid) {
-        List<ServerPlay> servers = queryAll(
-            "SELECT server_id, minutes FROM play_servers WHERE player_uuid = ?",
-            rs -> new ServerPlay(rs.getString(1), rs.getLong(2)),
-            StoreKeys.uuid(uuid)
-        );
-        servers.sort(Comparator.comparingLong(ServerPlay::minutes).reversed().thenComparing(ServerPlay::serverId));
-        return servers;
-    }
-
-    StoreRows.MojangUuidRow mojangUuid(UUID uuid) {
-        return queryOne(
+    Optional<MojangUuidCache> mojangUuid(UUID uuid) {
+        return Optional.ofNullable(queryOne(
             "SELECT username, fetched_at FROM mojang_uuid WHERE player_uuid = ?",
-            rs -> new StoreRows.MojangUuidRow(emptyIfNull(rs.getString(1)), rs.getLong(2)),
-            StoreKeys.uuid(uuid)
-        );
+            rs -> new MojangUuidCache(emptyIfNull(rs.getString(1)), Instant.ofEpochMilli(rs.getLong(2))),
+            id(uuid)
+        ));
     }
 
-    void putMojangUuid(UUID uuid, StoreRows.MojangUuidRow row) {
+    void putMojangUuid(UUID uuid, String username, Instant fetchedAt) {
+        String stored = username == null ? "" : username;
         upsert(
-            "SELECT player_uuid FROM mojang_uuid WHERE player_uuid = ?",
             "UPDATE mojang_uuid SET username = ?, fetched_at = ? WHERE player_uuid = ?",
+            List.of(stored, fetchedAt.toEpochMilli(), id(uuid)),
             "INSERT INTO mojang_uuid (player_uuid, username, fetched_at) VALUES (?,?,?)",
-            List.of(StoreKeys.uuid(uuid)),
-            List.of(row.username(), row.fetchedAt(), StoreKeys.uuid(uuid)),
-            List.of(StoreKeys.uuid(uuid), row.username(), row.fetchedAt())
+            List.of(id(uuid), stored, fetchedAt.toEpochMilli())
         );
     }
 
-    StoreRows.MojangNameRow mojangName(String usernameLower) {
-        return queryOne(
+    Optional<MojangNameCache> mojangName(String usernameLower) {
+        return Optional.ofNullable(queryOne(
             "SELECT player_uuid, username, fetched_at FROM mojang_name WHERE username_lower = ?",
-            rs -> new StoreRows.MojangNameRow(emptyIfNull(rs.getString(1)), emptyIfNull(rs.getString(2)), rs.getLong(3)),
+            rs -> {
+                String rawUuid = emptyIfNull(rs.getString(1));
+                String rawName = emptyIfNull(rs.getString(2));
+                return new MojangNameCache(
+                    rawUuid.isBlank() ? null : UUID.fromString(rawUuid),
+                    rawName.isBlank() ? null : rawName,
+                    Instant.ofEpochMilli(rs.getLong(3))
+                );
+            },
             usernameLower
-        );
+        ));
     }
 
-    void putMojangName(String usernameLower, StoreRows.MojangNameRow row) {
+    void putMojangName(String usernameLower, MojangNameCache cache) {
+        String storedUuid = cache.uuid() == null ? "" : cache.uuid().toString();
+        String storedName = cache.username() == null ? "" : cache.username();
         upsert(
-            "SELECT username_lower FROM mojang_name WHERE username_lower = ?",
             "UPDATE mojang_name SET player_uuid = ?, username = ?, fetched_at = ? WHERE username_lower = ?",
+            List.of(storedUuid, storedName, cache.fetchedAt().toEpochMilli(), usernameLower),
             "INSERT INTO mojang_name (username_lower, player_uuid, username, fetched_at) VALUES (?,?,?,?)",
-            List.of(usernameLower),
-            List.of(row.uuid(), row.username(), row.fetchedAt(), usernameLower),
-            List.of(usernameLower, row.uuid(), row.username(), row.fetchedAt())
+            List.of(usernameLower, storedUuid, storedName, cache.fetchedAt().toEpochMilli())
         );
     }
 
-    StoreRows.ImportRow importProgress(String source) {
-        return queryOne(
+    void putMojangCurrent(UUID uuid, String username, Instant fetchedAt) {
+        putMojangUuid(uuid, username, fetchedAt);
+        putMojangName(username.toLowerCase(Locale.ROOT), new MojangNameCache(uuid, username, fetchedAt));
+    }
+
+    Optional<ImportProgress> importProgress(String source) {
+        return Optional.ofNullable(queryOne(
             "SELECT processed, total, last_timestamp, skip_count, status, silenced FROM import_progress WHERE source_id = ?",
-            rs -> new StoreRows.ImportRow(
-                rs.getLong(1),
-                rs.getLong(2),
-                emptyIfNull(rs.getString(3)),
-                rs.getLong(4),
-                rs.getString(5),
-                rs.getBoolean(6)
-            ),
+            rs -> {
+                String lastTimestamp = emptyIfNull(rs.getString(3));
+                return new ImportProgress(
+                    source,
+                    rs.getLong(1),
+                    rs.getLong(2),
+                    lastTimestamp.isBlank() ? null : LocalDateTime.parse(lastTimestamp),
+                    rs.getLong(4),
+                    rs.getString(5),
+                    rs.getBoolean(6)
+                );
+            },
             source
-        );
+        ));
     }
 
-    void putImportProgress(String source, StoreRows.ImportRow row) {
+    void saveImportProgress(ImportProgress progress) {
+        String lastTimestamp = progress.lastTimestamp() == null ? "" : progress.lastTimestamp().toString();
         upsert(
-            "SELECT source_id FROM import_progress WHERE source_id = ?",
             "UPDATE import_progress SET processed = ?, total = ?, last_timestamp = ?, skip_count = ?, status = ?, silenced = ? WHERE source_id = ?",
+            List.of(progress.processed(), progress.total(), lastTimestamp, progress.skip(), progress.status(), progress.silenced(), progress.source()),
             "INSERT INTO import_progress (source_id, processed, total, last_timestamp, skip_count, status, silenced) VALUES (?,?,?,?,?,?,?)",
-            List.of(source),
-            List.of(row.processed(), row.total(), row.lastTimestamp(), row.skip(), row.status(), row.silenced(), source),
-            List.of(source, row.processed(), row.total(), row.lastTimestamp(), row.skip(), row.status(), row.silenced())
+            List.of(progress.source(), progress.processed(), progress.total(), lastTimestamp, progress.skip(), progress.status(), progress.silenced())
         );
     }
 
-    private void createTable(String sql) {
-        try (Statement statement = connection.createStatement()) {
-            statement.execute(sql);
-        } catch (SQLException e) {
-            if (e.getMessage() != null && e.getMessage().contains("already exists")) {
-                return;
+    private void createTables() {
+        for (String sql : TABLES) {
+            try (Statement statement = connection.createStatement()) {
+                statement.execute(sql);
+            } catch (SQLException e) {
+                if (e.getMessage() == null || !e.getMessage().contains("already exists")) {
+                    throw wrap(e);
+                }
             }
-            throw wrap(e);
         }
     }
 
-    private void upsert(String existsSql, String updateSql, String insertSql, List<Object> existsParams, List<Object> updateParams, List<Object> insertParams) {
-        if (exists(existsSql, existsParams.toArray())) {
-            execute(updateSql, updateParams.toArray());
-        } else {
+    private void indexName(UUID uuid, String username) {
+        String lower = lower(username);
+        String id = id(uuid);
+        if (exists("SELECT player_uuid FROM name_index WHERE username_lower = ? AND player_uuid = ?", lower, id)) {
+            return;
+        }
+        execute("INSERT INTO name_index (username_lower, player_uuid) VALUES (?,?)", lower, id);
+    }
+
+    private List<SeenName> listHistory(UUID uuid) {
+        return queryAll(
+            "SELECT username, last_seen FROM username_history WHERE player_uuid = ? ORDER BY last_seen DESC",
+            rs -> new SeenName(rs.getString(1), Instant.ofEpochMilli(rs.getLong(2))),
+            id(uuid)
+        );
+    }
+
+    private int countPlayDays(UUID uuid) {
+        Integer count = queryOne("SELECT COUNT(*) FROM play_days WHERE player_uuid = ?", rs -> rs.getInt(1), id(uuid));
+        return count == null ? 0 : count;
+    }
+
+    private Optional<LocalDate> lastPlayedBefore(UUID uuid, LocalDate excluded) {
+        return Optional.ofNullable(queryOne(
+            "SELECT MAX(play_day) FROM play_days WHERE player_uuid = ? AND play_day <> ?",
+            rs -> {
+                String latest = rs.getString(1);
+                return latest == null || latest.isBlank() ? null : LocalDate.parse(latest);
+            },
+            id(uuid),
+            excluded.toString()
+        ));
+    }
+
+    private List<ServerPlay> listServers(UUID uuid) {
+        return queryAll(
+            "SELECT server_id, minutes FROM play_servers WHERE player_uuid = ? ORDER BY minutes DESC, server_id ASC",
+            rs -> new ServerPlay(rs.getString(1), rs.getLong(2)),
+            id(uuid)
+        );
+    }
+
+    private void addServerMinute(UUID uuid, String serverId) {
+        if (serverId == null || serverId.isBlank()) {
+            return;
+        }
+        if (execute("UPDATE play_servers SET minutes = minutes + 1 WHERE player_uuid = ? AND server_id = ?", id(uuid), serverId) == 0) {
+            execute("INSERT INTO play_servers (player_uuid, server_id, minutes) VALUES (?,?,?)", id(uuid), serverId, 1L);
+        }
+    }
+
+    private void upsert(String updateSql, List<Object> updateParams, String insertSql, List<Object> insertParams) {
+        if (execute(updateSql, updateParams.toArray()) == 0) {
             execute(insertSql, insertParams.toArray());
         }
     }
@@ -380,10 +445,7 @@ final class StoreDb {
         try (PreparedStatement statement = connection.prepareStatement(sql)) {
             bind(statement, params);
             try (ResultSet rows = statement.executeQuery()) {
-                if (!rows.next()) {
-                    return null;
-                }
-                return mapper.map(rows);
+                return rows.next() ? mapper.map(rows) : null;
             }
         } catch (SQLException e) {
             throw wrap(e);
@@ -420,12 +482,23 @@ final class StoreDb {
         }
     }
 
+    private static String id(UUID uuid) {
+        return uuid.toString();
+    }
+
+    private static String lower(String username) {
+        return username.toLowerCase(Locale.ROOT);
+    }
+
     private static String emptyIfNull(String value) {
         return value == null ? "" : value;
     }
 
     private static RuntimeException wrap(SQLException e) {
         return new IllegalStateException(e);
+    }
+
+    private record PlayerFields(String currentUsername, String note, long noteTakenAt, long totalMinutes, int sessionCount) {
     }
 
     @FunctionalInterface

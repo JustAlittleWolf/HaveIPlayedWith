@@ -13,8 +13,6 @@ import net.fabricmc.loader.api.FabricLoader;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.nio.file.Files;
-
 public class HaveIPlayedWith implements ClientModInitializer {
     public static final String MOD_ID = "haveiplayedwith";
     public static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
@@ -25,7 +23,6 @@ public class HaveIPlayedWith implements ClientModInitializer {
     @Override
     public void onInitializeClient() {
         try {
-            Files.createDirectories(ModPaths.directory());
             players = new PlayerStore(ModPaths.databaseDirectory());
             MojangProfileApi mojang = new MojangProfileApi(players.mojangProfiles());
             CraftyPlayerApi crafty = new CraftyPlayerApi();
