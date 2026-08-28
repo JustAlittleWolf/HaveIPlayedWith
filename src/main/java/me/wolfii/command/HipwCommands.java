@@ -96,11 +96,12 @@ public final class HipwCommands {
 	}
 
 	private void setNote(FabricClientCommandSource source, String name, String note) {
+		String cleaned = note.replace('\n', ' ').replace('\r', ' ').strip();
 		worker.execute(() -> {
 			List<PlayerSnapshot> matches = database.findByName(name);
 			if (!matches.isEmpty()) {
 				for (PlayerSnapshot match : matches) {
-					database.setNote(match.uuid(), match.currentUsername(), note);
+					database.setNote(match.uuid(), match.currentUsername(), cleaned);
 					tell(source, QueryMessages.noteSaved(match.currentUsername()));
 				}
 				return;
@@ -114,7 +115,7 @@ public final class HipwCommands {
 				return;
 			}
 			UUID confirmed = uuid;
-			tell(source, QueryMessages.noteConfirm(name, confirmed, note));
+			tell(source, QueryMessages.noteConfirm(name, confirmed, cleaned));
 		});
 	}
 
