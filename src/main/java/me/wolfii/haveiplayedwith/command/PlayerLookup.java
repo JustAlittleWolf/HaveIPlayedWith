@@ -9,16 +9,19 @@ import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
 
 import java.util.List;
 import java.util.concurrent.ExecutorService;
+import java.util.function.Supplier;
 
 final class PlayerLookup {
     private final PlayerStore players;
     private final MojangProfileApi mojang;
     private final ExecutorService worker;
+    private final Supplier<String> liveSessionId;
 
-    PlayerLookup(PlayerStore players, MojangProfileApi mojang, ExecutorService worker) {
+    PlayerLookup(PlayerStore players, MojangProfileApi mojang, ExecutorService worker, Supplier<String> liveSessionId) {
         this.players = players;
         this.mojang = mojang;
         this.worker = worker;
+        this.liveSessionId = liveSessionId;
     }
 
     void query(FabricClientCommandSource source, PlayerArguments.ResolvedPlayer target) {
@@ -51,7 +54,8 @@ final class PlayerLookup {
             }
         });
         PlayerSnapshot latest = players.get(match.uuid()).orElse(match);
-        if (latest.hasPlayed()) {
+        long currentSessionMinutes = players.sessionMinutes(latest.uuid(), liveSessionId.get());
+        if (latest.hasPlayedBefore(currentSessionMinutes)) {
             CommandFeedback.tell(source, QueryMessages.playedWith(latest));
             if (!latest.servers().isEmpty()) {
                 CommandFeedback.tell(source, QueryMessages.seenOn(latest));

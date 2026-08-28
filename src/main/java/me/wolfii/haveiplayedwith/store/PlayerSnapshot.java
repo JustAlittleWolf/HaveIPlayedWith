@@ -33,7 +33,26 @@ public record PlayerSnapshot(
         return servers.isEmpty() ? Optional.empty() : Optional.of(servers.getFirst());
     }
 
+    /** Extra minutes required beyond the current session so live logging cannot look like prior play. */
+    public static final int CURRENT_SESSION_BUFFER_MINUTES = 5;
+
     public boolean hasPlayed() {
         return totalMinutes > 0 || sessionCount > 0 || daysPlayed > 0;
+    }
+
+    /**
+     * True when history is from before this client session. Minutes already logged for
+     * {@code currentSessionMinutes} are ignored, plus {@link #CURRENT_SESSION_BUFFER_MINUTES}
+     * so calendar-minute ticks cannot flip the answer to yes.
+     */
+    public boolean hasPlayedBefore(long currentSessionMinutes) {
+        long sessionMinutes = Math.max(0L, currentSessionMinutes);
+        if (sessionMinutes == 0L) {
+            return hasPlayed();
+        }
+        if (totalMinutes > sessionMinutes + CURRENT_SESSION_BUFFER_MINUTES) {
+            return true;
+        }
+        return sessionCount > 1;
     }
 }
