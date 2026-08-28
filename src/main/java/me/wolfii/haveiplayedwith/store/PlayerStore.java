@@ -45,6 +45,19 @@ public final class PlayerStore implements AutoCloseable {
         return session.call(() -> loadSnapshot(uuid));
     }
 
+    public long sessionMinutes(UUID uuid, String sessionId) {
+        if (sessionId == null || sessionId.isBlank()) {
+            return 0L;
+        }
+        return session.call(() -> {
+            String raw = session.playSessions.get(StoreKeys.session(uuid, sessionId));
+            if (raw == null || raw.isBlank()) {
+                return 0L;
+            }
+            return Long.parseLong(raw);
+        });
+    }
+
     public void setNote(UUID uuid, String username, String note) {
         session.run(() -> {
             ensurePlayerRow(uuid, username);
@@ -65,7 +78,7 @@ public final class PlayerStore implements AutoCloseable {
             ensurePlayerRow(uuid, username);
             touchUsername(uuid, username, now);
             setCurrentUsername(uuid, username);
-            addSession(uuid, sessionId);
+            addSessionMinute(uuid, sessionId);
             addMinute(uuid, day, serverId);
             return previousName;
         });
@@ -259,9 +272,21 @@ public final class PlayerStore implements AutoCloseable {
         if (session.playSessions.containsKey(key)) {
             return;
         }
-        session.playSessions.put(key, "1");
+        session.playSessions.put(key, "0");
         StoreRows.PlayerRow row = playerRow(uuid);
         putPlayer(uuid, row.plusSession());
+    }
+
+    private void addSessionMinute(UUID uuid, String sessionId) {
+        String key = StoreKeys.session(uuid, sessionId);
+        String raw = session.playSessions.get(key);
+        if (raw == null) {
+            session.playSessions.put(key, "1");
+            StoreRows.PlayerRow row = playerRow(uuid);
+            putPlayer(uuid, row.plusSession());
+            return;
+        }
+        session.playSessions.put(key, Long.toString(Long.parseLong(raw) + 1));
     }
 
     private void addMinute(UUID uuid, LocalDate day, String serverId) {

@@ -112,6 +112,27 @@ class PlayerStoreTest {
             PlayerSnapshot snapshot = players.get(uuid).orElseThrow();
             assertEquals(1, snapshot.sessionCount());
             assertEquals(2, snapshot.totalMinutes());
+            assertEquals(2, players.sessionMinutes(uuid, "live:boot"));
+        }
+    }
+
+    @Test
+    void currentSessionMinutesDoNotCountAsPlayedBefore() {
+        try (PlayerStore players = new PlayerStore(temp.resolve("players.mv"))) {
+            UUID uuid = UUID.randomUUID();
+            players.recordLivePlay(uuid, "Steve", LocalDate.of(2026, 8, 1), "live:now", "hypixel.net");
+            players.recordLivePlay(uuid, "Steve", LocalDate.of(2026, 8, 1), "live:now", "hypixel.net");
+            PlayerSnapshot snapshot = players.get(uuid).orElseThrow();
+            assertEquals(2, players.sessionMinutes(uuid, "live:now"));
+            assertFalse(snapshot.hasPlayedBefore(players.sessionMinutes(uuid, "live:now")));
+
+            players.recordLivePlay(uuid, "Steve", LocalDate.of(2026, 8, 2), "live:earlier", "hypixel.net");
+            for (int i = 0; i < 6; i++) {
+                players.recordLivePlay(uuid, "Steve", LocalDate.of(2026, 8, 2), "live:earlier", "hypixel.net");
+            }
+            PlayerSnapshot later = players.get(uuid).orElseThrow();
+            assertEquals(2, players.sessionMinutes(uuid, "live:now"));
+            assertTrue(later.hasPlayedBefore(players.sessionMinutes(uuid, "live:now")));
         }
     }
 

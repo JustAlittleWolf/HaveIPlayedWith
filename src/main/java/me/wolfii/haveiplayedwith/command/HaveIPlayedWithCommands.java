@@ -4,6 +4,7 @@ import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import me.wolfii.haveiplayedwith.importing.ImportControls;
 import me.wolfii.haveiplayedwith.mojang.MojangProfileApi;
+import me.wolfii.haveiplayedwith.observe.PlayerObserver;
 import me.wolfii.haveiplayedwith.store.PlayerStore;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommands;
@@ -17,14 +18,14 @@ public final class HaveIPlayedWithCommands {
     private final PlayerLookup lookup;
     private final PlayerNotes notes;
 
-    public HaveIPlayedWithCommands(PlayerStore players, MojangProfileApi mojang, ImportControls imports) {
+    public HaveIPlayedWithCommands(PlayerStore players, MojangProfileApi mojang, ImportControls imports, PlayerObserver observer) {
         this.imports = imports;
         ExecutorService worker = Executors.newSingleThreadExecutor(runnable -> {
             Thread thread = new Thread(runnable, "haveiplayedwith-commands");
             thread.setDaemon(true);
             return thread;
         });
-        this.lookup = new PlayerLookup(players, mojang, worker);
+        this.lookup = new PlayerLookup(players, mojang, worker, observer::liveSessionId);
         this.notes = new PlayerNotes(players, mojang, worker);
     }
 

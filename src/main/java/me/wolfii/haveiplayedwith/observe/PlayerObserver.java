@@ -66,6 +66,10 @@ public final class PlayerObserver {
         };
     }
 
+    public String liveSessionId() {
+        return "live:" + sessionId;
+    }
+
     public void register() {
         ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> locationId = PlayLocations.current(client));
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
@@ -194,7 +198,7 @@ public final class PlayerObserver {
         }
         announceRename(
             sighting.uuid(),
-            players.recordLivePlay(sighting.uuid(), sighting.username(), sighting.day(), "live:" + sighting.sessionId(), sighting.serverId()),
+            players.recordLivePlay(sighting.uuid(), sighting.username(), sighting.day(), liveSessionId(), sighting.serverId()),
             sighting.username()
         );
     }

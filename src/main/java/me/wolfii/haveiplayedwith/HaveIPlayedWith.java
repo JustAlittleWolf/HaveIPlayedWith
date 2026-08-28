@@ -35,7 +35,7 @@ public class HaveIPlayedWith implements ClientModInitializer {
             if (FabricLoader.getInstance().isModLoaded("allthelogs")) {
                 AllTheLogsCompat.install(players, crafty, mojang, imports);
             }
-            new HaveIPlayedWithCommands(players, mojang, imports).register();
+            new HaveIPlayedWithCommands(players, mojang, imports, observer).register();
             ClientLifecycleEvents.CLIENT_STOPPING.register(client -> close());
             LOGGER.info("Have I Played With initialized ({})", ModPaths.databaseFile());
         } catch (Exception e) {
