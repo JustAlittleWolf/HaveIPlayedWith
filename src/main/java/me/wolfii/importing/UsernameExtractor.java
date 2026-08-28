@@ -1,5 +1,7 @@
 package me.wolfii.importing;
 
+import me.wolfii.MinecraftUsernames;
+
 import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -15,7 +17,7 @@ import java.util.regex.Pattern;
  * </ul>
  */
 public final class UsernameExtractor {
-	public static final Pattern USERNAME = Pattern.compile("[a-zA-Z0-9_]{3,16}");
+	public static final Pattern USERNAME = MinecraftUsernames.PATTERN;
 	private static final Pattern JOIN_LEAVE = Pattern.compile("^([a-zA-Z0-9_]{3,16}) (?:joined|left)\\b");
 	private static final Pattern NAME_THEN_COLON = Pattern.compile("([a-zA-Z0-9_]{3,16}):");
 
@@ -45,7 +47,7 @@ public final class UsernameExtractor {
 	}
 
 	public static boolean isUsername(String name) {
-		return name != null && USERNAME.matcher(name).matches();
+		return MinecraftUsernames.isValid(name);
 	}
 
 	private static Optional<String> angledName(String line) {

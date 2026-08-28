@@ -1,6 +1,7 @@
 package me.wolfii.observe;
 
 import com.mojang.authlib.GameProfile;
+import me.wolfii.MinecraftUsernames;
 import me.wolfii.db.PlayerDatabase;
 import me.wolfii.net.MojangClient;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
@@ -97,7 +98,7 @@ public final class PlayerObserver {
 		}
 		UUID uuid = profileId(profile);
 		String name = profileName(profile);
-		if (uuid == null || name == null || name.isBlank()) {
+		if (uuid == null || !MinecraftUsernames.isValid(name)) {
 			return;
 		}
 		if (!seen.add(uuid)) {
