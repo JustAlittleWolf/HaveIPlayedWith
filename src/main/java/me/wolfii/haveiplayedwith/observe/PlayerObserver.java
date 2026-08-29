@@ -18,9 +18,7 @@ import net.minecraft.network.chat.Component;
 
 import java.time.Instant;
 import java.time.LocalDate;
-import java.util.HashSet;
 import java.util.Optional;
-import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
@@ -29,7 +27,8 @@ import java.util.concurrent.ExecutorService;
 
 /**
  * Watches the tab list and nearby players every tick so joins and name changes are noticed
- * immediately. Each player is only processed once per calendar minute (cached by UUID + name).
+ * quickly. Each UUID is only queued once per calendar minute, stored on that UUID rather
+ * than wiped globally, so a minute change does not re-offer everyone at once.
  *
  * <p>The client thread only reads game profiles and hands them to {@link #sightings}; every cache
  * read, API call and database write happens on one of this class' own threads.
@@ -39,6 +38,11 @@ public final class PlayerObserver {
     private static final int MAX_LOOKUP_BUFFER = 500;
     /** Sightings waiting to be classified as "needs a lookup" or "already known". */
     private static final int MAX_SIGHTING_BUFFER = 2048;
+    /**
+     * New UUIDs accepted per tick. Spreads a busy tab list across ticks instead of dumping
+     * every newly-due player into the queue on the first tick of a minute.
+     */
+    private static final int NEW_SIGHTINGS_PER_TICK = 16;
     private static final long CREDIT_MEMORY_MINUTES = 60;
     private final PlayerStore players;
     private final MojangProfileApi mojang;
@@ -48,7 +52,9 @@ public final class PlayerObserver {
     private final ConcurrentHashMap<UUID, Sighting> pendingLookups = new ConcurrentHashMap<>();
     private final BlockingQueue<UUID> lookups = new ArrayBlockingQueue<>(MAX_LOOKUP_BUFFER);
     private final ConcurrentHashMap<UUID, Long> creditedMinute = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<UUID, String> noticedThisMinute = new ConcurrentHashMap<>();
+    /** Calendar minute this UUID was last handed to {@link #sightings}. */
+    private final ConcurrentHashMap<UUID, Long> lastNotedMinute = new ConcurrentHashMap<>();
+    private final TickPass pass = new TickPass();
     private volatile long currentMinute = Long.MIN_VALUE;
     /** One id for this client run, assigned at boot and kept across join/disconnect. */
     private final String sessionId = UUID.randomUUID().toString();
@@ -69,7 +75,7 @@ public final class PlayerObserver {
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
             locationId = null;
             creditedMinute.clear();
-            noticedThisMinute.clear();
+            lastNotedMinute.clear();
             currentMinute = Long.MIN_VALUE;
         });
         ClientTickEvents.END_CLIENT_TICK.register(this::tick);
@@ -85,23 +91,30 @@ public final class PlayerObserver {
             return;
         }
         long epochMinute = System.currentTimeMillis() / 60_000L;
-        if (epochMinute != currentMinute) {
-            currentMinute = epochMinute;
-            noticedThisMinute.clear();
-            creditedMinute.values().removeIf(minute -> minute < epochMinute - CREDIT_MEMORY_MINUTES);
-        }
-        String serverId = location(client);
-        LocalDate day = LocalDate.now();
-        Set<UUID> seen = new HashSet<>();
+        pruneIfNewMinute(epochMinute);
+        pass.reset(epochMinute, sessionId, location(client));
         ClientPacketListener connection = client.getConnection();
         for (PlayerInfo info : connection.getListedOnlinePlayers()) {
-            offer(info.getProfile(), day, epochMinute, sessionId, serverId, seen);
+            if (!offer(info.getProfile(), pass)) {
+                return;
+            }
         }
         for (AbstractClientPlayer player : client.level.players()) {
-            offer(player.getGameProfile(), day, epochMinute, sessionId, serverId, seen);
+            if (!offer(player.getGameProfile(), pass)) {
+                return;
+            }
         }
-        LocalPlayer self = client.player;
-        offer(self.getGameProfile(), day, epochMinute, sessionId, serverId, seen);
+        offer(client.player.getGameProfile(), pass);
+    }
+
+    private void pruneIfNewMinute(long epochMinute) {
+        if (epochMinute == currentMinute) {
+            return;
+        }
+        currentMinute = epochMinute;
+        long keepAfter = epochMinute - CREDIT_MEMORY_MINUTES;
+        lastNotedMinute.values().removeIf(minute -> minute < keepAfter);
+        creditedMinute.values().removeIf(minute -> minute < keepAfter);
     }
 
     private String location(Minecraft client) {
@@ -116,25 +129,33 @@ public final class PlayerObserver {
         return resolved;
     }
 
-    private void offer(GameProfile profile, LocalDate day, long epochMinute, String session, String serverId, Set<UUID> seen) {
+    /**
+     * @return {@code false} when this tick should stop offering, because the per-tick budget
+     *     is spent or the sighting queue is full
+     */
+    private boolean offer(GameProfile profile, TickPass pass) {
         if (profile == null) {
-            return;
+            return true;
         }
         UUID uuid = profile.id();
+        if (uuid == null) {
+            return true;
+        }
+        Long lastNoted = lastNotedMinute.get(uuid);
+        if (lastNoted != null && lastNoted == pass.epochMinute) {
+            return true;
+        }
         String name = profile.name();
-        if (uuid == null || !MinecraftUsernames.isValid(name)) {
-            return;
+        if (!MinecraftUsernames.isValid(name)) {
+            return true;
         }
-        if (!seen.add(uuid)) {
-            return;
+        LocalDate day = pass.day();
+        lastNotedMinute.put(uuid, pass.epochMinute);
+        if (!sightings.offer(new Sighting(uuid, name, day, pass.epochMinute, pass.session, pass.serverId))) {
+            lastNotedMinute.remove(uuid, pass.epochMinute);
+            return false;
         }
-        if (name.equals(noticedThisMinute.get(uuid))) {
-            return;
-        }
-        noticedThisMinute.put(uuid, name);
-        if (!sightings.offer(new Sighting(uuid, name, day, epochMinute, session, serverId))) {
-            noticedThisMinute.remove(uuid, name);
-        }
+        return --pass.budget > 0;
     }
 
     /** Decides off the client thread whether a sighting can be credited from cache or needs the API. */
@@ -211,6 +232,29 @@ public final class PlayerObserver {
             Component message = RenameMessages.playerRenamed(previous, currentName, uuid);
             self.sendSystemMessage(message);
         });
+    }
+
+    private static final class TickPass {
+        private long epochMinute;
+        private String session;
+        private String serverId;
+        private int budget;
+        private LocalDate day;
+
+        private void reset(long epochMinute, String session, String serverId) {
+            this.epochMinute = epochMinute;
+            this.session = session;
+            this.serverId = serverId;
+            this.budget = NEW_SIGHTINGS_PER_TICK;
+            this.day = null;
+        }
+
+        private LocalDate day() {
+            if (day == null) {
+                day = LocalDate.now();
+            }
+            return day;
+        }
     }
 
     private record Sighting(UUID uuid, String username, LocalDate day, long epochMinute, String sessionId, String serverId) {
