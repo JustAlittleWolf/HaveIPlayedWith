@@ -8,16 +8,16 @@ import java.util.Optional;
 import java.util.UUID;
 
 /**
- * Player store backed by Nitrite. Each logical write is committed from the
- * database thread, not the client thread.
+ * Player store backed by a single Nitrite file. Reads and writes run on the
+ * database thread; MVStore auto-commit flushes to disk in the background.
  */
 public final class PlayerStore implements AutoCloseable {
     private final StoreDb db;
     private final MojangProfileStore mojangProfiles;
     private final ImportProgressStore importProgress;
 
-    public PlayerStore(Path directory) {
-        this.db = StoreDb.open(directory);
+    public PlayerStore(Path file) {
+        this.db = StoreDb.open(file);
         this.mojangProfiles = new MojangProfileStore(db);
         this.importProgress = new ImportProgressStore(db);
     }

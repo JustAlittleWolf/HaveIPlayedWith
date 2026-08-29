@@ -3,9 +3,6 @@ package me.wolfii.haveiplayedwith.store;
 import me.wolfii.haveiplayedwith.ModLog;
 import me.wolfii.haveiplayedwith.ModThreads;
 import org.dizitart.no2.Nitrite;
-import org.dizitart.no2.collection.NitriteCollection;
-import org.dizitart.no2.transaction.Session;
-import org.dizitart.no2.transaction.Transaction;
 
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
@@ -13,20 +10,15 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Serializes every store read and write onto one thread and commits after each task.
+ * Serializes every store read and write onto one thread. MVStore auto-commit
+ * flushes to disk in the background; {@link Nitrite#close()} writes anything still pending.
  */
 final class StoreWorker implements AutoCloseable {
     private final ExecutorService worker = ModThreads.singleWorker("db");
     private final Nitrite nitrite;
-    private final ThreadLocal<Transaction> currentTx = new ThreadLocal<>();
 
     StoreWorker(Nitrite nitrite) {
         this.nitrite = nitrite;
-    }
-
-    NitriteCollection collection(String name) {
-        Transaction tx = currentTx.get();
-        return tx != null ? tx.getCollection(name) : nitrite.getCollection(name);
     }
 
     private static RuntimeException unwrap(ExecutionException e) {
@@ -39,27 +31,7 @@ final class StoreWorker implements AutoCloseable {
 
     <T> T call(Callable<T> task) {
         try {
-            return worker.submit(() -> {
-                try (Session session = nitrite.createSession()) {
-                    try (Transaction tx = session.beginTransaction()) {
-                        currentTx.set(tx);
-                        try {
-                            T result = task.call();
-                            tx.commit();
-                            return result;
-                        } catch (Exception e) {
-                            try {
-                                tx.rollback();
-                            } catch (Exception rollback) {
-                                e.addSuppressed(rollback);
-                            }
-                            throw e;
-                        } finally {
-                            currentTx.remove();
-                        }
-                    }
-                }
-            }).get();
+            return worker.submit(task).get();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException(e);

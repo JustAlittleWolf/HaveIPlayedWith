@@ -5,11 +5,11 @@ import net.fabricmc.loader.api.FabricLoader;
 import java.nio.file.Path;
 
 /**
- * Instance-relative paths. The Nitrite file lives in Fabric's config directory
- * under {@code haveiplayedwith/database/store.db}.
+ * Instance-relative paths. The Nitrite file is {@code haveiplayedwith/store.db}
+ * under Fabric's config directory.
  */
 public final class ModPaths {
-    private static final String DATABASE_DIRECTORY_NAME = "database";
+    private static final String DATABASE_FILE_NAME = "store.db";
 
     private ModPaths() {
     }
@@ -18,7 +18,7 @@ public final class ModPaths {
         return FabricLoader.getInstance().getConfigDir().resolve(HaveIPlayedWith.MOD_ID);
     }
 
-    public static Path databaseDirectory() {
-        return directory().resolve(DATABASE_DIRECTORY_NAME);
+    public static Path databaseFile() {
+        return directory().resolve(DATABASE_FILE_NAME);
     }
 }

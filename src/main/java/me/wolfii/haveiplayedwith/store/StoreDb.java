@@ -54,34 +54,53 @@ import static org.dizitart.no2.collection.Document.createDocument;
 import static org.dizitart.no2.filters.FluentFilter.where;
 
 /**
- * Nitrite connection and queries, over the collections {@link StoreSchema} defines.
- * All access goes through {@link StoreWorker}.
+ * Nitrite queries over the collections {@link StoreSchema} defines. All access
+ * goes through {@link StoreWorker}. Writes stay in MVStore's memory until its
+ * auto-commit thread flushes (about a second of idle, H2's default).
  */
 final class StoreDb implements AutoCloseable {
-    static final String STORE_FILE_NAME = "store.db";
-
     private final StoreWorker worker;
+    private final NitriteCollection players;
+    private final NitriteCollection history;
+    private final NitriteCollection nameIndex;
+    private final NitriteCollection playDays;
+    private final NitriteCollection sessions;
+    private final NitriteCollection playServers;
+    private final NitriteCollection mojangUuid;
+    private final NitriteCollection mojangName;
+    private final NitriteCollection imports;
 
-    private StoreDb(StoreWorker worker) {
+    private StoreDb(StoreWorker worker, Nitrite nitrite) {
         this.worker = worker;
+        this.players = nitrite.getCollection(PLAYERS);
+        this.history = nitrite.getCollection(USERNAME_HISTORY);
+        this.nameIndex = nitrite.getCollection(NAME_INDEX);
+        this.playDays = nitrite.getCollection(PLAY_DAYS);
+        this.sessions = nitrite.getCollection(PLAY_SESSIONS);
+        this.playServers = nitrite.getCollection(PLAY_SERVERS);
+        this.mojangUuid = nitrite.getCollection(MOJANG_UUID);
+        this.mojangName = nitrite.getCollection(MOJANG_NAME);
+        this.imports = nitrite.getCollection(IMPORT_PROGRESS);
     }
 
-    static StoreDb open(Path directory) {
+    static StoreDb open(Path file) {
         try {
-            Files.createDirectories(directory);
-            Path file = directory.resolve(STORE_FILE_NAME);
+            Path parent = file.getParent();
+            if (parent != null) {
+                Files.createDirectories(parent);
+            }
             MVStoreModule storeModule = MVStoreModule.withConfig()
                 .filePath(file.toAbsolutePath().toString())
-                .autoCommit(false)
+                .compress(true)
+                .autoCommit(true)
                 .build();
             Nitrite nitrite = Nitrite.builder()
                 .loadModule(storeModule)
                 .openOrCreate();
             StoreSchema.create(nitrite);
-            nitrite.commit();
-            return new StoreDb(new StoreWorker(nitrite));
+            return new StoreDb(new StoreWorker(nitrite), nitrite);
         } catch (Exception e) {
-            throw new IllegalStateException("Failed to open HaveIPlayedWith database at " + directory, e);
+            throw new IllegalStateException("Failed to open HaveIPlayedWith database at " + file, e);
         }
     }
 
@@ -99,14 +118,14 @@ final class StoreDb implements AutoCloseable {
     }
 
     boolean hasPlayer(UUID uuid) {
-        return byKey(players(), id(uuid)) != null;
+        return byKey(players, id(uuid)) != null;
     }
 
     void ensurePlayer(UUID uuid, String username) {
         if (hasPlayer(uuid)) {
             return;
         }
-        insert(players(), id(uuid), createDocument(PLAYER_UUID, id(uuid))
+        insert(players, id(uuid), createDocument(PLAYER_UUID, id(uuid))
             .put(CURRENT_USERNAME, username)
             .put(NOTE, "")
             .put(NOTE_TAKEN_AT, 0L)
@@ -116,26 +135,26 @@ final class StoreDb implements AutoCloseable {
     }
 
     void setNote(UUID uuid, String note, long noteTakenAt) {
-        update(players(), id(uuid), doc -> {
+        update(players, id(uuid), doc -> {
             doc.put(NOTE, note);
             doc.put(NOTE_TAKEN_AT, noteTakenAt);
         });
     }
 
     void setCurrentUsername(UUID uuid, String username) {
-        update(players(), id(uuid), doc -> doc.put(CURRENT_USERNAME, username));
+        update(players, id(uuid), doc -> doc.put(CURRENT_USERNAME, username));
         indexName(uuid, username);
     }
 
     void touchUsername(UUID uuid, String username, Instant seenAt) {
         long millis = seenAt.toEpochMilli();
         String key = key(id(uuid), lower(username));
-        Document existing = byKey(history(), key);
+        Document existing = byKey(history, key);
         if (existing != null && asLong(existing.get(LAST_SEEN)) >= millis) {
             indexName(uuid, username);
             return;
         }
-        upsert(history(), key, createDocument(PLAYER_UUID, id(uuid))
+        upsert(history, key, createDocument(PLAYER_UUID, id(uuid))
             .put(USERNAME_LOWER, lower(username))
             .put(USERNAME, username)
             .put(LAST_SEEN, millis));
@@ -152,14 +171,14 @@ final class StoreDb implements AutoCloseable {
 
     List<PlayerSnapshot> findByName(String name) {
         List<PlayerSnapshot> snapshots = new ArrayList<>();
-        for (Document row : nameIndex().find(where(USERNAME_LOWER).eq(lower(name)))) {
+        for (Document row : nameIndex.find(where(USERNAME_LOWER).eq(lower(name)))) {
             snapshot(UUID.fromString(text(row, PLAYER_UUID))).ifPresent(snapshots::add);
         }
         return snapshots;
     }
 
     Optional<PlayerSnapshot> snapshot(UUID uuid) {
-        Document row = byKey(players(), id(uuid));
+        Document row = byKey(players, id(uuid));
         if (row == null) {
             return Optional.empty();
         }
@@ -184,7 +203,7 @@ final class StoreDb implements AutoCloseable {
     }
 
     Long sessionMinutes(UUID uuid, String sessionId) {
-        Document row = byKey(sessions(), key(id(uuid), sessionId));
+        Document row = byKey(sessions, key(id(uuid), sessionId));
         return row == null ? null : asLong(row.get(MINUTES));
     }
 
@@ -192,7 +211,7 @@ final class StoreDb implements AutoCloseable {
         if (sessionMinutes(uuid, sessionId) != null) {
             return;
         }
-        insert(sessions(), key(id(uuid), sessionId), createDocument(PLAYER_UUID, id(uuid))
+        insert(sessions, key(id(uuid), sessionId), createDocument(PLAYER_UUID, id(uuid))
             .put(SESSION_ID, sessionId)
             .put(MINUTES, 0L));
         bumpSessionCount(uuid);
@@ -200,10 +219,10 @@ final class StoreDb implements AutoCloseable {
 
     void addSessionMinute(UUID uuid, String sessionId) {
         String key = key(id(uuid), sessionId);
-        if (update(sessions(), key, doc -> doc.put(MINUTES, asLong(doc.get(MINUTES)) + 1))) {
+        if (update(sessions, key, doc -> doc.put(MINUTES, asLong(doc.get(MINUTES)) + 1))) {
             return;
         }
-        insert(sessions(), key, createDocument(PLAYER_UUID, id(uuid))
+        insert(sessions, key, createDocument(PLAYER_UUID, id(uuid))
             .put(SESSION_ID, sessionId)
             .put(MINUTES, 1L));
         bumpSessionCount(uuid);
@@ -211,27 +230,27 @@ final class StoreDb implements AutoCloseable {
 
     void addMinute(UUID uuid, LocalDate day, String serverId) {
         String key = key(id(uuid), day.toString());
-        if (!update(playDays(), key, doc -> doc.put(MINUTES, asLong(doc.get(MINUTES)) + 1))) {
-            insert(playDays(), key, createDocument(PLAYER_UUID, id(uuid))
+        if (!update(playDays, key, doc -> doc.put(MINUTES, asLong(doc.get(MINUTES)) + 1))) {
+            insert(playDays, key, createDocument(PLAYER_UUID, id(uuid))
                 .put(PLAY_DAY, day.toString())
                 .put(MINUTES, 1L));
         }
         addServerMinute(uuid, serverId);
-        update(players(), id(uuid), doc -> doc.put(TOTAL_MINUTES, asLong(doc.get(TOTAL_MINUTES)) + 1));
+        update(players, id(uuid), doc -> doc.put(TOTAL_MINUTES, asLong(doc.get(TOTAL_MINUTES)) + 1));
     }
 
     void ensurePlayDay(UUID uuid, LocalDate day) {
         String key = key(id(uuid), day.toString());
-        if (byKey(playDays(), key) != null) {
+        if (byKey(playDays, key) != null) {
             return;
         }
-        insert(playDays(), key, createDocument(PLAYER_UUID, id(uuid))
+        insert(playDays, key, createDocument(PLAYER_UUID, id(uuid))
             .put(PLAY_DAY, day.toString())
             .put(MINUTES, 0L));
     }
 
     Optional<MojangUuidCache> mojangUuid(UUID uuid) {
-        Document row = byKey(mojangUuid(), id(uuid));
+        Document row = byKey(mojangUuid, id(uuid));
         if (row == null) {
             return Optional.empty();
         }
@@ -240,13 +259,13 @@ final class StoreDb implements AutoCloseable {
 
     void putMojangUuid(UUID uuid, String username, Instant fetchedAt) {
         String stored = username == null ? "" : username;
-        upsert(mojangUuid(), id(uuid), createDocument(PLAYER_UUID, id(uuid))
+        upsert(mojangUuid, id(uuid), createDocument(PLAYER_UUID, id(uuid))
             .put(USERNAME, stored)
             .put(FETCHED_AT, fetchedAt.toEpochMilli()));
     }
 
     Optional<MojangNameCache> mojangName(String usernameLower) {
-        Document row = byKey(mojangName(), usernameLower);
+        Document row = byKey(mojangName, usernameLower);
         if (row == null) {
             return Optional.empty();
         }
@@ -262,7 +281,7 @@ final class StoreDb implements AutoCloseable {
     void putMojangName(String usernameLower, MojangNameCache cache) {
         String storedUuid = cache.uuid() == null ? "" : cache.uuid().toString();
         String storedName = cache.username() == null ? "" : cache.username();
-        upsert(mojangName(), usernameLower, createDocument(USERNAME_LOWER, usernameLower)
+        upsert(mojangName, usernameLower, createDocument(USERNAME_LOWER, usernameLower)
             .put(PLAYER_UUID, storedUuid)
             .put(USERNAME, storedName)
             .put(FETCHED_AT, cache.fetchedAt().toEpochMilli()));
@@ -274,7 +293,7 @@ final class StoreDb implements AutoCloseable {
     }
 
     Optional<ImportProgress> importProgress(String source) {
-        Document row = byKey(imports(), source);
+        Document row = byKey(imports, source);
         if (row == null) {
             return Optional.empty();
         }
@@ -292,7 +311,7 @@ final class StoreDb implements AutoCloseable {
 
     void saveImportProgress(ImportProgress progress) {
         String lastTimestamp = progress.lastTimestamp() == null ? "" : progress.lastTimestamp().toString();
-        upsert(imports(), progress.source(), createDocument(SOURCE_ID, progress.source())
+        upsert(imports, progress.source(), createDocument(SOURCE_ID, progress.source())
             .put(PROCESSED, progress.processed())
             .put(TOTAL, progress.total())
             .put(LAST_TIMESTAMP, lastTimestamp)
@@ -305,15 +324,15 @@ final class StoreDb implements AutoCloseable {
         String lower = lower(username);
         String id = id(uuid);
         String key = key(lower, id);
-        if (byKey(nameIndex(), key) != null) {
+        if (byKey(nameIndex, key) != null) {
             return;
         }
-        insert(nameIndex(), key, createDocument(USERNAME_LOWER, lower).put(PLAYER_UUID, id));
+        insert(nameIndex, key, createDocument(USERNAME_LOWER, lower).put(PLAYER_UUID, id));
     }
 
     private List<SeenName> listHistory(UUID uuid) {
         List<SeenName> names = new ArrayList<>();
-        for (Document row : history().find(where(PLAYER_UUID).eq(id(uuid)))) {
+        for (Document row : history.find(where(PLAYER_UUID).eq(id(uuid)))) {
             names.add(new SeenName(text(row, USERNAME), Instant.ofEpochMilli(asLong(row.get(LAST_SEEN)))));
         }
         names.sort(Comparator.comparing(SeenName::lastSeen).reversed());
@@ -321,13 +340,13 @@ final class StoreDb implements AutoCloseable {
     }
 
     private int countPlayDays(UUID uuid) {
-        return (int) playDays().find(where(PLAYER_UUID).eq(id(uuid))).size();
+        return (int) playDays.find(where(PLAYER_UUID).eq(id(uuid))).size();
     }
 
     private Optional<LocalDate> lastPlayedBefore(UUID uuid, LocalDate excluded) {
         LocalDate latest = null;
         String skip = excluded.toString();
-        for (Document row : playDays().find(where(PLAYER_UUID).eq(id(uuid)))) {
+        for (Document row : playDays.find(where(PLAYER_UUID).eq(id(uuid)))) {
             String day = text(row, PLAY_DAY);
             if (day.isBlank() || day.equals(skip)) {
                 continue;
@@ -342,7 +361,7 @@ final class StoreDb implements AutoCloseable {
 
     private List<ServerPlay> listServers(UUID uuid) {
         List<ServerPlay> servers = new ArrayList<>();
-        for (Document row : playServers().find(where(PLAYER_UUID).eq(id(uuid)))) {
+        for (Document row : playServers.find(where(PLAYER_UUID).eq(id(uuid)))) {
             servers.add(new ServerPlay(text(row, SERVER_ID), asLong(row.get(MINUTES))));
         }
         servers.sort(Comparator.comparingLong(ServerPlay::minutes).reversed().thenComparing(ServerPlay::serverId));
@@ -354,52 +373,16 @@ final class StoreDb implements AutoCloseable {
             return;
         }
         String key = key(id(uuid), serverId);
-        if (update(playServers(), key, doc -> doc.put(MINUTES, asLong(doc.get(MINUTES)) + 1))) {
+        if (update(playServers, key, doc -> doc.put(MINUTES, asLong(doc.get(MINUTES)) + 1))) {
             return;
         }
-        insert(playServers(), key, createDocument(PLAYER_UUID, id(uuid))
+        insert(playServers, key, createDocument(PLAYER_UUID, id(uuid))
             .put(SERVER_ID, serverId)
             .put(MINUTES, 1L));
     }
 
     private void bumpSessionCount(UUID uuid) {
-        update(players(), id(uuid), doc -> doc.put(SESSION_COUNT, (int) asLong(doc.get(SESSION_COUNT)) + 1));
-    }
-
-    private NitriteCollection players() {
-        return worker.collection(PLAYERS);
-    }
-
-    private NitriteCollection history() {
-        return worker.collection(USERNAME_HISTORY);
-    }
-
-    private NitriteCollection nameIndex() {
-        return worker.collection(NAME_INDEX);
-    }
-
-    private NitriteCollection playDays() {
-        return worker.collection(PLAY_DAYS);
-    }
-
-    private NitriteCollection sessions() {
-        return worker.collection(PLAY_SESSIONS);
-    }
-
-    private NitriteCollection playServers() {
-        return worker.collection(PLAY_SERVERS);
-    }
-
-    private NitriteCollection mojangUuid() {
-        return worker.collection(MOJANG_UUID);
-    }
-
-    private NitriteCollection mojangName() {
-        return worker.collection(MOJANG_NAME);
-    }
-
-    private NitriteCollection imports() {
-        return worker.collection(IMPORT_PROGRESS);
+        update(players, id(uuid), doc -> doc.put(SESSION_COUNT, (int) asLong(doc.get(SESSION_COUNT)) + 1));
     }
 
     private static Document byKey(NitriteCollection collection, String key) {
