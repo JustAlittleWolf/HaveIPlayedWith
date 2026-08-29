@@ -21,8 +21,8 @@ class RenameMessagesTest {
         assertEquals(2, contents.getArgs().length);
         Component previous = (Component) contents.getArgs()[0];
         Component current = (Component) contents.getArgs()[1];
-        assertEquals(Boolean.TRUE, previous.getStyle().isUnderlined());
-        assertEquals(Boolean.TRUE, current.getStyle().isUnderlined());
+        assertEquals(Boolean.FALSE, previous.getStyle().isUnderlined());
+        assertEquals(Boolean.FALSE, current.getStyle().isUnderlined());
         assertEquals(Boolean.FALSE, previous.getStyle().isItalic());
         assertEquals(Boolean.FALSE, current.getStyle().isItalic());
     }

@@ -55,7 +55,6 @@ final class ChatStyle {
 
     private static MutableComponent linkedUsername(String name, Component hover) {
         return usernameText(name).withStyle(style -> style
-            .withUnderlined(true)
             .withClickEvent(new ClickEvent.OpenUrl(URI.create("https://namemc.com/profile/" + name)))
             .withHoverEvent(new HoverEvent.ShowText(hover)));
     }
