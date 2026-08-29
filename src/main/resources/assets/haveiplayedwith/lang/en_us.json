@@ -1,5 +1,5 @@
 {
-  "haveiplayedwith.query.not_played": "You have not played with %s previously",
+  "haveiplayedwith.query.not_played": "You have not played with %s before",
   "haveiplayedwith.query.played": "You have played with %s for %s across %s",
   "haveiplayedwith.query.days.one": "%s day",
   "haveiplayedwith.query.days": "%s days",
