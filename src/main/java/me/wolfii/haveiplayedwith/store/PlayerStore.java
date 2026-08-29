@@ -13,15 +13,15 @@ import java.util.UUID;
  */
 public final class PlayerStore implements AutoCloseable {
     private final StoreDb db;
-    private final MojangProfileStore mojangProfiles;
+    private final ProfileCache profiles;
 
     public PlayerStore(Path file) {
         this.db = StoreDb.open(file);
-        this.mojangProfiles = new MojangProfileStore(db);
+        this.profiles = new ProfileCache(db);
     }
 
-    public MojangProfileStore mojangProfiles() {
-        return mojangProfiles;
+    public ProfileCache profiles() {
+        return profiles;
     }
 
     public List<PlayerSnapshot> findByName(String name) {
@@ -54,6 +54,9 @@ public final class PlayerStore implements AutoCloseable {
      * @return the last name this player was seen as, when the new username is different
      */
     public Optional<String> recordLivePlay(UUID uuid, String username, LocalDate day, String sessionId, String serverId) {
+        if (serverId == null || serverId.isBlank()) {
+            throw new IllegalArgumentException("serverId");
+        }
         return db.call(() -> {
             Optional<String> previousName = db.previousSeenNameIfDifferent(uuid, username);
             db.ensurePlayer(uuid, username);
@@ -65,7 +68,7 @@ public final class PlayerStore implements AutoCloseable {
         });
     }
 
-    public Optional<String> applyMojangUsername(UUID uuid, String username, Instant fetchedAt) {
+    public Optional<String> applyUsername(UUID uuid, String username, Instant fetchedAt) {
         return db.call(() -> {
             if (!db.hasPlayer(uuid)) {
                 return Optional.empty();

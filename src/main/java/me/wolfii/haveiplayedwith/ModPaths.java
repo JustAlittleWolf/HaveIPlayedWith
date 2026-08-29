@@ -14,7 +14,7 @@ public final class ModPaths {
     private ModPaths() {
     }
 
-    public static Path directory() {
+    private static Path directory() {
         return FabricLoader.getInstance().getConfigDir().resolve(HaveIPlayedWith.MOD_ID);
     }
 

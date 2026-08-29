@@ -5,7 +5,7 @@ import me.wolfii.haveiplayedwith.MinecraftUsernames;
 import me.wolfii.haveiplayedwith.ModLog;
 import me.wolfii.haveiplayedwith.ModThreads;
 import me.wolfii.haveiplayedwith.chat.RenameMessages;
-import me.wolfii.haveiplayedwith.mojang.MojangProfileApi;
+import me.wolfii.haveiplayedwith.profile.ProfileApi;
 import me.wolfii.haveiplayedwith.store.PlayerStore;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
@@ -34,7 +34,7 @@ import java.util.concurrent.ExecutorService;
  * read, API call and database write happens on one of this class' own threads.
  */
 public final class PlayerObserver {
-    /** Sightings waiting on a Mojang lookup, per the 500 entry buffer the API budget allows. */
+    /** Sightings waiting on a profile lookup, per the 500 entry buffer the API budget allows. */
     private static final int MAX_LOOKUP_BUFFER = 500;
     /** Sightings waiting to be classified as "needs a lookup" or "already known". */
     private static final int MAX_SIGHTING_BUFFER = 2048;
@@ -45,9 +45,9 @@ public final class PlayerObserver {
     private static final int NEW_SIGHTINGS_PER_TICK = 16;
     private static final long CREDIT_MEMORY_MINUTES = 60;
     private final PlayerStore players;
-    private final MojangProfileApi mojang;
+    private final ProfileApi profiles;
     private final ExecutorService dispatcher = ModThreads.singleWorker("sightings");
-    private final ExecutorService lookupWorker = ModThreads.singleWorker("mojang");
+    private final ExecutorService lookupWorker = ModThreads.singleWorker("profiles");
     private final BlockingQueue<Sighting> sightings = new ArrayBlockingQueue<>(MAX_SIGHTING_BUFFER);
     private final ConcurrentHashMap<UUID, Sighting> pendingLookups = new ConcurrentHashMap<>();
     private final BlockingQueue<UUID> lookups = new ArrayBlockingQueue<>(MAX_LOOKUP_BUFFER);
@@ -58,10 +58,10 @@ public final class PlayerObserver {
     private volatile long currentMinute = Long.MIN_VALUE;
     /** One id for this client run, assigned at boot and kept across join/disconnect. */
     private final String sessionId = UUID.randomUUID().toString();
-    private volatile String locationId;
-    public PlayerObserver(PlayerStore players, MojangProfileApi mojang) {
+    private volatile String currentServerId;
+    public PlayerObserver(PlayerStore players, ProfileApi profiles) {
         this.players = players;
-        this.mojang = mojang;
+        this.profiles = profiles;
         dispatcher.execute(this::dispatchLoop);
         lookupWorker.execute(this::lookupLoop);
     }
@@ -71,9 +71,9 @@ public final class PlayerObserver {
     }
 
     public void register() {
-        ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> locationId = PlayLocations.current(client));
+        ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> currentServerId = ServerId.current(client));
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
-            locationId = null;
+            currentServerId = null;
             creditedMinute.clear();
             lastNotedMinute.clear();
             currentMinute = Long.MIN_VALUE;
@@ -92,7 +92,11 @@ public final class PlayerObserver {
         }
         long epochMinute = System.currentTimeMillis() / 60_000L;
         pruneIfNewMinute(epochMinute);
-        pass.reset(epochMinute, sessionId, location(client));
+        String serverId = resolveServerId(client);
+        if (serverId == null) {
+            return;
+        }
+        pass.reset(epochMinute, serverId);
         ClientPacketListener connection = client.getConnection();
         for (PlayerInfo info : connection.getListedOnlinePlayers()) {
             if (!offer(info.getProfile(), pass)) {
@@ -117,14 +121,14 @@ public final class PlayerObserver {
         creditedMinute.values().removeIf(minute -> minute < keepAfter);
     }
 
-    private String location(Minecraft client) {
-        String current = locationId;
+    private String resolveServerId(Minecraft client) {
+        String current = currentServerId;
         if (current != null) {
             return current;
         }
-        String resolved = PlayLocations.current(client);
+        String resolved = ServerId.current(client);
         if (resolved != null) {
-            locationId = resolved;
+            currentServerId = resolved;
         }
         return resolved;
     }
@@ -151,7 +155,7 @@ public final class PlayerObserver {
         }
         LocalDate day = pass.day();
         lastNotedMinute.put(uuid, pass.epochMinute);
-        if (!sightings.offer(new Sighting(uuid, name, day, pass.epochMinute, pass.session, pass.serverId))) {
+        if (!sightings.offer(new Sighting(uuid, name, day, pass.epochMinute, pass.serverId))) {
             lastNotedMinute.remove(uuid, pass.epochMinute);
             return false;
         }
@@ -163,11 +167,11 @@ public final class PlayerObserver {
         while (!Thread.currentThread().isInterrupted()) {
             try {
                 Sighting sighting = sightings.take();
-                if (mojang.matchesCachedName(sighting.uuid(), sighting.username())) {
+                if (profiles.matchesCachedName(sighting.uuid(), sighting.username())) {
                     credit(sighting);
                     continue;
                 }
-                if (!mojang.needsFetch(sighting.uuid(), sighting.username())) {
+                if (!profiles.needsFetch(sighting.uuid(), sighting.username())) {
                     continue;
                 }
                 Sighting previous = pendingLookups.put(sighting.uuid(), sighting);
@@ -191,16 +195,16 @@ public final class PlayerObserver {
                 if (sighting == null) {
                     continue;
                 }
-                var profile = mojang.lookupUuid(uuid);
+                var profile = profiles.lookupUuid(uuid);
                 if (profile.isEmpty() || !profile.get().username().equalsIgnoreCase(sighting.username())) {
                     continue;
                 }
-                credit(new Sighting(uuid, profile.get().username(), sighting.day(), sighting.epochMinute(), sighting.sessionId(), sighting.serverId()));
+                credit(new Sighting(uuid, profile.get().username(), sighting.day(), sighting.epochMinute(), sighting.serverId()));
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 return;
             } catch (RuntimeException e) {
-                ModLog.LOGGER.debug("Mojang verification failed", e);
+                ModLog.LOGGER.debug("Profile verification failed", e);
             }
         }
     }
@@ -208,7 +212,7 @@ public final class PlayerObserver {
     private void credit(Sighting sighting) {
         Long last = creditedMinute.put(sighting.uuid(), sighting.epochMinute());
         if (last != null && last == sighting.epochMinute()) {
-            announceRename(sighting.uuid(), players.applyMojangUsername(sighting.uuid(), sighting.username(), Instant.now()), sighting.username());
+            announceRename(sighting.uuid(), players.applyUsername(sighting.uuid(), sighting.username(), Instant.now()), sighting.username());
             return;
         }
         announceRename(
@@ -236,14 +240,12 @@ public final class PlayerObserver {
 
     private static final class TickPass {
         private long epochMinute;
-        private String session;
         private String serverId;
         private int budget;
         private LocalDate day;
 
-        private void reset(long epochMinute, String session, String serverId) {
+        private void reset(long epochMinute, String serverId) {
             this.epochMinute = epochMinute;
-            this.session = session;
             this.serverId = serverId;
             this.budget = NEW_SIGHTINGS_PER_TICK;
             this.day = null;
@@ -257,6 +259,6 @@ public final class PlayerObserver {
         }
     }
 
-    private record Sighting(UUID uuid, String username, LocalDate day, long epochMinute, String sessionId, String serverId) {
+    private record Sighting(UUID uuid, String username, LocalDate day, long epochMinute, String serverId) {
     }
 }

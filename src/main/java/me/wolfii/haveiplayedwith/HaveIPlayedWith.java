@@ -1,8 +1,8 @@
 package me.wolfii.haveiplayedwith;
 
 import me.wolfii.haveiplayedwith.command.HaveIPlayedWithCommands;
-import me.wolfii.haveiplayedwith.mojang.MojangProfileApi;
 import me.wolfii.haveiplayedwith.observe.PlayerObserver;
+import me.wolfii.haveiplayedwith.profile.ProfileApi;
 import me.wolfii.haveiplayedwith.store.PlayerStore;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
@@ -17,10 +17,10 @@ public class HaveIPlayedWith implements ClientModInitializer {
     public void onInitializeClient() {
         try {
             players = new PlayerStore(ModPaths.databaseFile());
-            MojangProfileApi mojang = new MojangProfileApi(players.mojangProfiles());
-            observer = new PlayerObserver(players, mojang);
+            ProfileApi profiles = new ProfileApi(players.profiles());
+            observer = new PlayerObserver(players, profiles);
             observer.register();
-            new HaveIPlayedWithCommands(players, mojang, observer).register();
+            new HaveIPlayedWithCommands(players, profiles, observer).register();
             ClientLifecycleEvents.CLIENT_STOPPING.register(client -> close());
             ModLog.LOGGER.info("Have I Played With initialized ({})", ModPaths.databaseFile());
         } catch (Exception e) {

@@ -50,17 +50,6 @@ public final class QueryMessages {
         return ChatStyle.wording("haveiplayedwith.query.past_names", ChatStyle.join(names));
     }
 
-    public static Component seenOn(PlayerSnapshot player) {
-        List<Component> servers = new ArrayList<>(player.servers().size());
-        for (ServerPlay server : player.servers()) {
-            MutableComponent id = ChatStyle.data(server.serverId(), ChatStyle.SERVER).withStyle(style -> style.withHoverEvent(
-                new HoverEvent.ShowText(DurationFormat.hover(server.minutes()))
-            ));
-            servers.add(ChatStyle.wording("haveiplayedwith.query.server.entry", id, DurationFormat.compact(server.minutes())));
-        }
-        return ChatStyle.wording("haveiplayedwith.query.seen_on", ChatStyle.join(servers));
-    }
-
     public static Component unknownAccount(String name) {
         return ChatStyle.wording("haveiplayedwith.query.unknown_account", ChatStyle.username(name));
     }
@@ -98,9 +87,8 @@ public final class QueryMessages {
     }
 
     private static Component mostServerHover(PlayerSnapshot player) {
-        return player.mostPlayedServer()
-            .map(server -> ChatStyle.wording("haveiplayedwith.query.most_server", ChatStyle.data(server.serverId(), ChatStyle.SERVER)))
-            .orElseGet(() -> ChatStyle.wording("haveiplayedwith.query.most_server.none"));
+        ServerPlay server = player.mostPlayedServer().orElseThrow();
+        return ChatStyle.wording("haveiplayedwith.query.most_server", ChatStyle.data(server.serverId(), ChatStyle.SERVER));
     }
 
     private static Component hoverLines(Component first, Component second) {

@@ -38,12 +38,9 @@ class PlayerStoreTest {
             assertEquals("builds nice farms", snapshot.note().orElseThrow());
             assertTrue(snapshot.noteTakenAt().isPresent());
             assertEquals(LocalDate.of(2026, 8, 2), snapshot.lastPlayedBeforeToday().orElseThrow());
-            assertEquals("hypixel.net", snapshot.mostPlayedServer().orElseThrow().serverId());
             assertTrue(snapshot.pastNames().stream().anyMatch(name -> name.username().equals("Steve")));
-            assertEquals(List.of(
-                new ServerPlay("hypixel.net", 2),
-                new ServerPlay("world/Survival", 1)
-            ), snapshot.servers());
+            assertEquals("hypixel.net", snapshot.mostPlayedServer().orElseThrow().serverId());
+            assertEquals(2, snapshot.mostPlayedServer().orElseThrow().minutes());
         }
     }
 
@@ -61,7 +58,7 @@ class PlayerStoreTest {
             assertTrue(snapshot.noteTakenAt().isPresent());
             assertFalse(snapshot.hasPlayed());
             assertEquals(1, players.findByName("ghost").size());
-            assertTrue(snapshot.servers().isEmpty());
+            assertTrue(snapshot.mostPlayedServer().isEmpty());
         }
     }
 
@@ -76,10 +73,8 @@ class PlayerStoreTest {
         try (PlayerStore players = open()) {
             PlayerSnapshot snapshot = players.get(uuid).orElseThrow();
             assertEquals(3, snapshot.totalMinutes());
-            assertEquals(List.of(
-                new ServerPlay("world/Creative", 2),
-                new ServerPlay("mc.example.com:25566", 1)
-            ), snapshot.servers());
+            assertEquals("world/Creative", snapshot.mostPlayedServer().orElseThrow().serverId());
+            assertEquals(2, snapshot.mostPlayedServer().orElseThrow().minutes());
         }
     }
 
@@ -117,32 +112,32 @@ class PlayerStoreTest {
     }
 
     @Test
-    void blankServerIdDoesNotCreateAServerRow() {
+    void playRequiresAServerId() {
         try (PlayerStore players = open()) {
             UUID uuid = UUID.randomUUID();
-            players.recordLivePlay(uuid, "Steve", LocalDate.of(2026, 8, 1), "live:one", null);
-            players.recordLivePlay(uuid, "Steve", LocalDate.of(2026, 8, 1), "live:one", " ");
-            PlayerSnapshot snapshot = players.get(uuid).orElseThrow();
-            assertEquals(2, snapshot.totalMinutes());
-            assertTrue(snapshot.servers().isEmpty());
+            assertThrows(IllegalArgumentException.class, () ->
+                players.recordLivePlay(uuid, "Steve", LocalDate.of(2026, 8, 1), "live:one", null));
+            assertThrows(IllegalArgumentException.class, () ->
+                players.recordLivePlay(uuid, "Steve", LocalDate.of(2026, 8, 1), "live:one", " "));
+            assertTrue(players.get(uuid).isEmpty());
         }
     }
 
     @Test
-    void persistsMojangNameLookups() {
+    void persistsProfileLookups() {
         UUID uuid = UUID.fromString("61699b2e-d327-4a01-9f1e-0ea8c3f06bc6");
         Instant lastValid = Instant.parse("2026-08-01T00:00:00Z");
         try (PlayerStore players = open()) {
-            players.mojangProfiles().putName("steve", new MojangMapping(uuid, "Steve", lastValid));
-            players.mojangProfiles().putName("nobody", new MojangMapping(null, "", lastValid));
+            players.profiles().put(new ProfileMapping(uuid, "Steve", lastValid));
+            players.profiles().put(new ProfileMapping(null, "nobody", lastValid));
         }
         try (PlayerStore players = open()) {
-            MojangMapping steve = players.mojangProfiles().byName("steve").orElseThrow();
+            ProfileMapping steve = players.profiles().byName("steve").orElseThrow();
             assertEquals(uuid, steve.uuid());
             assertEquals("Steve", steve.username());
             assertEquals(lastValid, steve.lastValid());
-            assertEquals("Steve", players.mojangProfiles().byUuid(uuid).orElseThrow().username());
-            MojangMapping nobody = players.mojangProfiles().byName("nobody").orElseThrow();
+            assertEquals("Steve", players.profiles().byUuid(uuid).orElseThrow().username());
+            ProfileMapping nobody = players.profiles().byName("nobody").orElseThrow();
             assertNull(nobody.uuid());
             assertFalse(nobody.resolved());
         }
