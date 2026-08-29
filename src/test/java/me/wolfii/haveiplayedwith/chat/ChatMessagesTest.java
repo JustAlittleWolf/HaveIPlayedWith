@@ -25,27 +25,24 @@ class ChatMessagesTest {
     private static final UUID STEVE = UUID.fromString("61699b2e-d327-4a01-9f1e-0ea8c3f06bc6");
 
     @Test
-    void unplayedUsernamesAreItalic() {
-        Component notPlayed = QueryMessages.notPlayedWith("Alex", STEVE);
-        assertUsername(arg(notPlayed, 0), "Alex", false);
-    }
-
-    @Test
     void usernamesAreClickableAndShareAColor() {
+        Component notPlayed = QueryMessages.notPlayedWith("Alex", STEVE);
+        assertUsername(arg(notPlayed, 0), "Alex");
+
         Component played = QueryMessages.playedWith(snapshot());
         Component name = arg(played, 0);
-        assertUsername(name, "Alex", false);
+        assertUsername(name, "Alex");
 
         Component past = arg(QueryMessages.pastNames(snapshot()), 0);
         Component pastName = firstSibling(past);
-        assertUsername(pastName, "Steve", false);
+        assertUsername(pastName, "Steve");
 
         Component unknown = arg(QueryMessages.unknownAccount("Notch"), 0);
-        assertUsername(unknown, "Notch", false);
+        assertUsername(unknown, "Notch");
 
         Component renamed = RenameMessages.playerRenamed("Steve", "Alex", STEVE);
-        assertUsername(arg(renamed, 0), "Steve", false);
-        assertUsername(arg(renamed, 1), "Alex", false);
+        assertUsername(arg(renamed, 0), "Steve");
+        assertUsername(arg(renamed, 1), "Alex");
     }
 
     @Test
@@ -78,15 +75,6 @@ class ChatMessagesTest {
         assertEquals("haveiplayedwith.query.most_server", key(mostServer));
         assertEquals("hypixel.net", literal(arg(mostServer, 0)));
         assertEquals(ChatStyle.SERVER, color(arg(mostServer, 0)));
-
-        Component seenOn = QueryMessages.seenOn(snapshot());
-        Component serverList = arg(seenOn, 0);
-        Component firstServer = firstSibling(serverList);
-        Component serverId = arg(firstServer, 0);
-        assertEquals("hypixel.net", literal(serverId));
-        assertEquals(ChatStyle.SERVER, color(serverId));
-        assertEquals(false, serverId.getStyle().isUnderlined());
-        assertInstanceOf(HoverEvent.ShowText.class, serverId.getStyle().getHoverEvent());
     }
 
     @Test
@@ -105,11 +93,11 @@ class ChatMessagesTest {
     @Test
     void noteStatusMessagesIncludeTheUsername() {
         assertEquals("haveiplayedwith.note.saved", key(NoteMessages.noteSaved("Alex")));
-        assertUsername(arg(NoteMessages.noteSaved("Alex"), 0), "Alex", false);
+        assertUsername(arg(NoteMessages.noteSaved("Alex"), 0), "Alex");
         assertEquals("haveiplayedwith.note.cleared", key(NoteMessages.noteCleared("Alex")));
-        assertUsername(arg(NoteMessages.noteCleared("Alex"), 0), "Alex", false);
+        assertUsername(arg(NoteMessages.noteCleared("Alex"), 0), "Alex");
         assertEquals("haveiplayedwith.note.missing", key(NoteMessages.noteMissing("Alex")));
-        assertUsername(arg(NoteMessages.noteMissing("Alex"), 0), "Alex", false);
+        assertUsername(arg(NoteMessages.noteMissing("Alex"), 0), "Alex");
     }
 
     private static PlayerSnapshot snapshot() {
@@ -123,16 +111,16 @@ class ChatMessagesTest {
             2,
             Optional.of(LocalDate.of(2026, 8, 1)),
             List.of(new SeenName("Steve", Instant.parse("2026-08-01T12:00:00Z")), new SeenName("Alex", Instant.parse("2026-08-02T12:00:00Z"))),
-            List.of(new ServerPlay("hypixel.net", 60), new ServerPlay("world/Survival", 30))
+            Optional.of(new ServerPlay("hypixel.net", 60))
         );
     }
 
-    private static void assertUsername(Component name, String expected, boolean italic) {
+    private static void assertUsername(Component name, String expected) {
         assertEquals(expected, literal(name));
         assertEquals(ChatStyle.NAME, color(name));
         assertEquals(true, name.getStyle().isUnderlined());
         assertInstanceOf(ClickEvent.OpenUrl.class, name.getStyle().getClickEvent());
-        assertEquals(italic, name.getStyle().isItalic());
+        assertEquals(false, name.getStyle().isItalic());
     }
 
     private static Component arg(Component component, int index) {

@@ -16,24 +16,19 @@ public record PlayerSnapshot(
     int daysPlayed,
     Optional<LocalDate> lastPlayedBeforeToday,
     List<SeenName> names,
-    List<ServerPlay> servers
+    Optional<ServerPlay> mostPlayedServer
 ) {
     /** Extra minutes required beyond the current session so live logging cannot look like prior play. */
     public static final int CURRENT_SESSION_BUFFER_MINUTES = 5;
 
     public PlayerSnapshot {
         names = List.copyOf(names);
-        servers = List.copyOf(servers);
     }
 
     public List<SeenName> pastNames() {
         return names.stream()
             .filter(name -> !name.username().equalsIgnoreCase(currentUsername))
             .toList();
-    }
-
-    public Optional<ServerPlay> mostPlayedServer() {
-        return servers.isEmpty() ? Optional.empty() : Optional.of(servers.getFirst());
     }
 
     public boolean hasPlayed() {

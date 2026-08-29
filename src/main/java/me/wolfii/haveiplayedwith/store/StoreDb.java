@@ -25,7 +25,6 @@ import static me.wolfii.haveiplayedwith.store.StoreSchema.KEY;
 import static me.wolfii.haveiplayedwith.store.StoreSchema.LAST_SEEN;
 import static me.wolfii.haveiplayedwith.store.StoreSchema.LAST_VALID;
 import static me.wolfii.haveiplayedwith.store.StoreSchema.MINUTES;
-import static me.wolfii.haveiplayedwith.store.StoreSchema.MOJANG;
 import static me.wolfii.haveiplayedwith.store.StoreSchema.NOTE;
 import static me.wolfii.haveiplayedwith.store.StoreSchema.NOTE_TAKEN_AT;
 import static me.wolfii.haveiplayedwith.store.StoreSchema.PLAYERS;
@@ -34,9 +33,9 @@ import static me.wolfii.haveiplayedwith.store.StoreSchema.PLAY_DAY;
 import static me.wolfii.haveiplayedwith.store.StoreSchema.PLAY_DAYS;
 import static me.wolfii.haveiplayedwith.store.StoreSchema.PLAY_SERVERS;
 import static me.wolfii.haveiplayedwith.store.StoreSchema.PLAY_SESSIONS;
+import static me.wolfii.haveiplayedwith.store.StoreSchema.PROFILES;
 import static me.wolfii.haveiplayedwith.store.StoreSchema.SERVER_ID;
 import static me.wolfii.haveiplayedwith.store.StoreSchema.SESSION_COUNT;
-import static me.wolfii.haveiplayedwith.store.StoreSchema.SESSION_ID;
 import static me.wolfii.haveiplayedwith.store.StoreSchema.TOTAL_MINUTES;
 import static me.wolfii.haveiplayedwith.store.StoreSchema.USERNAME;
 import static me.wolfii.haveiplayedwith.store.StoreSchema.USERNAME_HISTORY;
@@ -56,7 +55,7 @@ final class StoreDb implements AutoCloseable {
     private final NitriteCollection playDays;
     private final NitriteCollection sessions;
     private final NitriteCollection playServers;
-    private final NitriteCollection mojang;
+    private final NitriteCollection profiles;
 
     private StoreDb(StoreWorker worker, Nitrite nitrite) {
         this.worker = worker;
@@ -65,7 +64,7 @@ final class StoreDb implements AutoCloseable {
         this.playDays = nitrite.getCollection(PLAY_DAYS);
         this.sessions = nitrite.getCollection(PLAY_SESSIONS);
         this.playServers = nitrite.getCollection(PLAY_SERVERS);
-        this.mojang = nitrite.getCollection(MOJANG);
+        this.profiles = nitrite.getCollection(PROFILES);
     }
 
     static StoreDb open(Path file) {
@@ -110,8 +109,7 @@ final class StoreDb implements AutoCloseable {
         if (hasPlayer(uuid)) {
             return;
         }
-        insert(players, id(uuid), createDocument(PLAYER_UUID, id(uuid))
-            .put(CURRENT_USERNAME, username)
+        insert(players, id(uuid), createDocument(CURRENT_USERNAME, username)
             .put(USERNAME_LOWER, lower(username))
             .put(NOTE, "")
             .put(NOTE_TAKEN_AT, 0L)
@@ -161,7 +159,7 @@ final class StoreDb implements AutoCloseable {
             ids.add(UUID.fromString(text(row, PLAYER_UUID)));
         }
         for (Document row : players.find(where(USERNAME_LOWER).eq(lower))) {
-            ids.add(UUID.fromString(text(row, PLAYER_UUID)));
+            ids.add(UUID.fromString(text(row, KEY)));
         }
         List<PlayerSnapshot> snapshots = new ArrayList<>();
         for (UUID uuid : ids) {
@@ -191,7 +189,7 @@ final class StoreDb implements AutoCloseable {
             countPlayDays(uuid),
             lastPlayedBefore(uuid, LocalDate.now()),
             listHistory(uuid),
-            listServers(uuid)
+            mostPlayedServer(uuid)
         ));
     }
 
@@ -205,13 +203,14 @@ final class StoreDb implements AutoCloseable {
         if (update(sessions, key, doc -> doc.put(MINUTES, asLong(doc.get(MINUTES)) + 1))) {
             return;
         }
-        insert(sessions, key, createDocument(PLAYER_UUID, id(uuid))
-            .put(SESSION_ID, sessionId)
-            .put(MINUTES, 1L));
+        insert(sessions, key, createDocument(MINUTES, 1L));
         bumpSessionCount(uuid);
     }
 
     void addMinute(UUID uuid, LocalDate day, String serverId) {
+        if (serverId == null || serverId.isBlank()) {
+            throw new IllegalArgumentException("serverId");
+        }
         String key = key(id(uuid), day.toString());
         if (!update(playDays, key, doc -> doc.put(MINUTES, asLong(doc.get(MINUTES)) + 1))) {
             insert(playDays, key, createDocument(PLAYER_UUID, id(uuid))
@@ -222,14 +221,14 @@ final class StoreDb implements AutoCloseable {
         update(players, id(uuid), doc -> doc.put(TOTAL_MINUTES, asLong(doc.get(TOTAL_MINUTES)) + 1));
     }
 
-    Optional<MojangMapping> mojangByUuid(UUID uuid) {
-        return mapping(byKey(mojang, id(uuid)));
+    Optional<ProfileMapping> profileByUuid(UUID uuid) {
+        return mapping(byKey(profiles, id(uuid)));
     }
 
-    Optional<MojangMapping> mojangByName(String usernameLower) {
-        MojangMapping newest = null;
-        for (Document row : mojang.find(where(USERNAME_LOWER).eq(lower(usernameLower)))) {
-            MojangMapping mapping = mapping(row).orElse(null);
+    Optional<ProfileMapping> profileByName(String usernameLower) {
+        ProfileMapping newest = null;
+        for (Document row : profiles.find(where(USERNAME_LOWER).eq(lower(usernameLower)))) {
+            ProfileMapping mapping = mapping(row).orElse(null);
             if (mapping == null) {
                 continue;
             }
@@ -240,15 +239,15 @@ final class StoreDb implements AutoCloseable {
         return Optional.ofNullable(newest);
     }
 
-    void putMojang(MojangMapping mapping) {
+    void putProfile(ProfileMapping mapping) {
         Instant lastValid = mapping.lastValid();
         if (mapping.uuid() != null) {
             String stored = mapping.username() == null ? "" : mapping.username();
             String lower = stored.isBlank() ? "" : lower(stored);
             if (!lower.isBlank()) {
-                removeKey(mojang, nameMissKey(lower));
+                removeKey(profiles, nameMissKey(lower));
             }
-            upsert(mojang, id(mapping.uuid()), createDocument(PLAYER_UUID, id(mapping.uuid()))
+            upsert(profiles, id(mapping.uuid()), createDocument(PLAYER_UUID, id(mapping.uuid()))
                 .put(USERNAME, stored)
                 .put(USERNAME_LOWER, lower)
                 .put(LAST_VALID, lastValid.toEpochMilli()));
@@ -258,13 +257,13 @@ final class StoreDb implements AutoCloseable {
         if (lower.isBlank()) {
             return;
         }
-        upsert(mojang, nameMissKey(lower), createDocument(PLAYER_UUID, "")
+        upsert(profiles, nameMissKey(lower), createDocument(PLAYER_UUID, "")
             .put(USERNAME, "")
             .put(USERNAME_LOWER, lower)
             .put(LAST_VALID, lastValid.toEpochMilli()));
     }
 
-    private static Optional<MojangMapping> mapping(Document row) {
+    private static Optional<ProfileMapping> mapping(Document row) {
         if (row == null) {
             return Optional.empty();
         }
@@ -273,9 +272,9 @@ final class StoreDb implements AutoCloseable {
         Instant lastValid = Instant.ofEpochMilli(asLong(row.get(LAST_VALID)));
         if (rawUuid.isBlank()) {
             String lookedUp = text(row, USERNAME_LOWER);
-            return Optional.of(new MojangMapping(null, lookedUp.isBlank() ? null : lookedUp, lastValid));
+            return Optional.of(new ProfileMapping(null, lookedUp.isBlank() ? null : lookedUp, lastValid));
         }
-        return Optional.of(new MojangMapping(
+        return Optional.of(new ProfileMapping(
             UUID.fromString(rawUuid),
             rawName.isBlank() ? null : rawName,
             lastValid
@@ -322,19 +321,20 @@ final class StoreDb implements AutoCloseable {
         return Optional.ofNullable(latest);
     }
 
-    private List<ServerPlay> listServers(UUID uuid) {
-        List<ServerPlay> servers = new ArrayList<>();
+    private Optional<ServerPlay> mostPlayedServer(UUID uuid) {
+        ServerPlay best = null;
         for (Document row : playServers.find(where(PLAYER_UUID).eq(id(uuid)))) {
-            servers.add(new ServerPlay(text(row, SERVER_ID), asLong(row.get(MINUTES))));
+            ServerPlay server = new ServerPlay(text(row, SERVER_ID), asLong(row.get(MINUTES)));
+            if (best == null
+                || server.minutes() > best.minutes()
+                || (server.minutes() == best.minutes() && server.serverId().compareTo(best.serverId()) < 0)) {
+                best = server;
+            }
         }
-        servers.sort(Comparator.comparingLong(ServerPlay::minutes).reversed().thenComparing(ServerPlay::serverId));
-        return servers;
+        return Optional.ofNullable(best);
     }
 
     private void addServerMinute(UUID uuid, String serverId) {
-        if (serverId == null || serverId.isBlank()) {
-            return;
-        }
         String key = key(id(uuid), serverId);
         if (update(playServers, key, doc -> doc.put(MINUTES, asLong(doc.get(MINUTES)) + 1))) {
             return;

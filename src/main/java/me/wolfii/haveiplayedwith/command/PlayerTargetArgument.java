@@ -7,14 +7,17 @@ import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import com.mojang.brigadier.exceptions.DynamicCommandExceptionType;
 import com.mojang.brigadier.suggestion.Suggestions;
 import com.mojang.brigadier.suggestion.SuggestionsBuilder;
+import me.wolfii.haveiplayedwith.profile.ProfileApi;
 import net.minecraft.commands.SharedSuggestionProvider;
 import net.minecraft.network.chat.Component;
 
 import java.util.Collection;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.regex.Pattern;
 
-final class PlayerTargetArgument implements ArgumentType<PlayerArguments.ResolvedPlayer> {
+final class PlayerTargetArgument implements ArgumentType<PlayerTargetArgument.PlayerTarget> {
     private static final DynamicCommandExceptionType INVALID = new DynamicCommandExceptionType(
         value -> Component.literal("Not a player name or UUID: " + value)
     );
@@ -23,6 +26,10 @@ final class PlayerTargetArgument implements ArgumentType<PlayerArguments.Resolve
         "alex",
         "069a79f4-44e9-4726-a5be-fca90e38aaf5"
     );
+    private static final Pattern DASHED_UUID = Pattern.compile(
+        "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+    );
+    private static final Pattern FLAT_UUID = Pattern.compile("[0-9a-fA-F]{32}");
 
     private PlayerTargetArgument() {
     }
@@ -31,12 +38,40 @@ final class PlayerTargetArgument implements ArgumentType<PlayerArguments.Resolve
         return new PlayerTargetArgument();
     }
 
-    public static PlayerArguments.ResolvedPlayer get(CommandContext<?> context, String name) {
-        return context.getArgument(name, PlayerArguments.ResolvedPlayer.class);
+    public static PlayerTarget get(CommandContext<?> context, String name) {
+        return context.getArgument(name, PlayerTarget.class);
+    }
+
+    static boolean isUuidToken(String token) {
+        return token != null && (DASHED_UUID.matcher(token).matches() || FLAT_UUID.matcher(token).matches());
+    }
+
+    /**
+     * Hyphenated tokens and 32-character hex strings are treated as UUIDs, not names, so a
+     * malformed one is reported as a bad UUID rather than looked up as a username.
+     */
+    static boolean looksLikeUuid(String token) {
+        if (token == null || token.isEmpty()) {
+            return false;
+        }
+        return token.indexOf('-') >= 0 || FLAT_UUID.matcher(token).matches();
+    }
+
+    static PlayerTarget parseToken(String token) {
+        if (token == null || token.isEmpty()) {
+            throw new IllegalArgumentException("empty player target");
+        }
+        if (isUuidToken(token)) {
+            return new PlayerTarget(null, ProfileApi.parseUuid(token));
+        }
+        if (looksLikeUuid(token)) {
+            throw new IllegalArgumentException("invalid uuid: " + token);
+        }
+        return new PlayerTarget(token, null);
     }
 
     @Override
-    public PlayerArguments.ResolvedPlayer parse(StringReader reader) throws CommandSyntaxException {
+    public PlayerTarget parse(StringReader reader) throws CommandSyntaxException {
         int start = reader.getCursor();
         String token = reader.readUnquotedString();
         if (token.isEmpty()) {
@@ -44,7 +79,7 @@ final class PlayerTargetArgument implements ArgumentType<PlayerArguments.Resolve
             throw CommandSyntaxException.BUILT_IN_EXCEPTIONS.readerExpectedSymbol().createWithContext(reader, "player");
         }
         try {
-            return PlayerArguments.parseToken(token);
+            return parseToken(token);
         } catch (IllegalArgumentException e) {
             reader.setCursor(start);
             throw INVALID.createWithContext(reader, token);
@@ -62,5 +97,8 @@ final class PlayerTargetArgument implements ArgumentType<PlayerArguments.Resolve
     @Override
     public Collection<String> getExamples() {
         return EXAMPLES;
+    }
+
+    record PlayerTarget(String name, UUID uuid) {
     }
 }

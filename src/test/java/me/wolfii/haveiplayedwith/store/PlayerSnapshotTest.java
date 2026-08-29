@@ -48,7 +48,7 @@ class PlayerSnapshotTest {
             daysPlayed,
             Optional.of(LocalDate.of(2026, 8, 1)),
             List.of(),
-            List.of()
+            Optional.empty()
         );
     }
 }

@@ -1,15 +1,16 @@
-package me.wolfii.haveiplayedwith.mojang;
+package me.wolfii.haveiplayedwith.profile;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import me.wolfii.haveiplayedwith.ModLog;
-import me.wolfii.haveiplayedwith.http.JsonAnswer;
-import me.wolfii.haveiplayedwith.http.JsonApi;
-import me.wolfii.haveiplayedwith.http.RateLimiter;
-import me.wolfii.haveiplayedwith.store.MojangMapping;
-import me.wolfii.haveiplayedwith.store.MojangProfileStore;
+import me.wolfii.haveiplayedwith.store.ProfileCache;
+import me.wolfii.haveiplayedwith.store.ProfileMapping;
 
+import java.net.URI;
 import java.net.URLEncoder;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
@@ -20,27 +21,31 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Wrapper for the Mojang Minecraft profile APIs on {@code api.mojang.com}.
- * Lookups are cached; network calls are limited to 25 / 10s.
+ * Looks up Minecraft profiles on {@code api.mojang.com}. Lookups are cached;
+ * network calls are limited to 25 / 10s.
  */
-public final class MojangProfileApi {
+public final class ProfileApi {
     public static final Duration STALE_AFTER = Duration.ofHours(24);
     private static final String UUID_LOOKUP = "https://api.mojang.com/minecraft/profile/lookup/";
     private static final String NAME_LOOKUP = "https://api.mojang.com/users/profiles/minecraft/";
-    private final MojangProfileStore store;
-    private final JsonApi api = new JsonApi("Mojang", new RateLimiter(25, 10, TimeUnit.SECONDS));
-    private final ConcurrentHashMap<UUID, MojangMapping> uuidMemory = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<String, MojangMapping> nameMemory = new ConcurrentHashMap<>();
+    private static final HttpClient HTTP = HttpClient.newBuilder()
+        .connectTimeout(Duration.ofSeconds(8))
+        .followRedirects(HttpClient.Redirect.NORMAL)
+        .build();
+    private final ProfileCache store;
+    private final RateLimiter limiter = new RateLimiter(25, 10, TimeUnit.SECONDS);
+    private final ConcurrentHashMap<UUID, ProfileMapping> uuidMemory = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, ProfileMapping> nameMemory = new ConcurrentHashMap<>();
 
-    public MojangProfileApi(MojangProfileStore store) {
+    public ProfileApi(ProfileCache store) {
         this.store = store;
     }
 
-    private static Optional<MojangProfile> profileOf(MojangMapping mapping) {
+    private static Optional<Profile> profileOf(ProfileMapping mapping) {
         if (!mapping.resolved()) {
             return Optional.empty();
         }
-        return Optional.of(new MojangProfile(mapping.uuid(), mapping.username()));
+        return Optional.of(new Profile(mapping.uuid(), mapping.username()));
     }
 
     private static String readName(String body) {
@@ -51,7 +56,7 @@ public final class MojangProfileApi {
         return json.has("name") ? json.get("name").getAsString() : null;
     }
 
-    private static Optional<MojangProfile> readProfile(String body) {
+    private static Optional<Profile> readProfile(String body) {
         if (body == null || body.isBlank()) {
             return Optional.empty();
         }
@@ -59,7 +64,7 @@ public final class MojangProfileApi {
         if (!json.has("id") || !json.has("name")) {
             return Optional.empty();
         }
-        return Optional.of(new MojangProfile(parseUuid(json.get("id").getAsString()), json.get("name").getAsString()));
+        return Optional.of(new Profile(parseUuid(json.get("id").getAsString()), json.get("name").getAsString()));
     }
 
     public static UUID parseUuid(String id) {
@@ -70,22 +75,22 @@ public final class MojangProfileApi {
         return UUID.fromString(dashed);
     }
 
-    public Optional<MojangMapping> cached(UUID uuid) {
-        MojangMapping memory = uuidMemory.get(uuid);
+    public Optional<ProfileMapping> cached(UUID uuid) {
+        ProfileMapping memory = uuidMemory.get(uuid);
         if (memory != null) {
             return Optional.of(memory);
         }
-        Optional<MojangMapping> stored = store.byUuid(uuid);
+        Optional<ProfileMapping> stored = store.byUuid(uuid);
         stored.ifPresent(this::remember);
         return stored;
     }
 
-    public boolean isStale(MojangMapping mapping) {
+    private boolean isStale(ProfileMapping mapping) {
         return Instant.now().minus(STALE_AFTER).isAfter(mapping.lastValid());
     }
 
     public boolean needsFetch(UUID uuid, String observedName) {
-        Optional<MojangMapping> cache = cached(uuid);
+        Optional<ProfileMapping> cache = cached(uuid);
         if (cache.isEmpty()) {
             return true;
         }
@@ -99,28 +104,28 @@ public final class MojangProfileApi {
     }
 
     /**
-     * True when Mojang already confirmed this UUID belongs to {@code observedName}.
+     * True when this UUID is already confirmed to belong to {@code observedName}.
      * Cached misses (empty username after 204/404) are not a match, so nearby NPCs
      * with fake UUIDs are not credited as players.
      */
     public boolean matchesCachedName(UUID uuid, String observedName) {
-        Optional<MojangMapping> cache = cached(uuid);
+        Optional<ProfileMapping> cache = cached(uuid);
         return cache.isPresent()
             && cache.get().resolved()
             && cache.get().username().equalsIgnoreCase(observedName);
     }
 
-    public Optional<MojangProfile> lookupUuid(UUID uuid) {
-        Optional<MojangMapping> cache = cached(uuid);
+    public Optional<Profile> lookupUuid(UUID uuid) {
+        Optional<ProfileMapping> cache = cached(uuid);
         if (cache.isPresent() && !isStale(cache.get()) && !cache.get().resolved()) {
             return Optional.empty();
         }
         return fetchUuid(uuid);
     }
 
-    public Optional<MojangProfile> lookupName(String username) {
+    public Optional<Profile> lookupName(String username) {
         String key = username.toLowerCase(Locale.ROOT);
-        Optional<MojangMapping> cache = cachedName(key);
+        Optional<ProfileMapping> cache = cachedName(key);
         if (cache.isPresent() && !isStale(cache.get())) {
             return profileOf(cache.get());
         }
@@ -134,17 +139,17 @@ public final class MojangProfileApi {
         return answer.profile();
     }
 
-    private Optional<MojangMapping> cachedName(String key) {
-        MojangMapping memory = nameMemory.get(key);
+    private Optional<ProfileMapping> cachedName(String key) {
+        ProfileMapping memory = nameMemory.get(key);
         if (memory != null) {
             return Optional.of(memory);
         }
-        Optional<MojangMapping> stored = store.byName(key);
+        Optional<ProfileMapping> stored = store.byName(key);
         stored.ifPresent(this::remember);
         return stored;
     }
 
-    private void remember(MojangMapping mapping) {
+    private void remember(ProfileMapping mapping) {
         if (mapping.uuid() != null) {
             uuidMemory.put(mapping.uuid(), mapping);
         }
@@ -159,27 +164,27 @@ public final class MojangProfileApi {
 
     /** Remembers that no account holds this name, so it is not looked up again until stale. */
     private void rememberMissingName(String key) {
-        MojangMapping mapping = new MojangMapping(null, key, Instant.now());
+        ProfileMapping mapping = new ProfileMapping(null, key, Instant.now());
         remember(mapping);
         store.put(mapping);
     }
 
-    private Optional<MojangProfile> fetchUuid(UUID uuid) {
+    private Optional<Profile> fetchUuid(UUID uuid) {
         try {
-            return switch (api.get(UUID_LOOKUP + uuid)) {
-                case JsonAnswer.Body body -> {
+            return switch (get(UUID_LOOKUP + uuid)) {
+                case Answer.Body body -> {
                     String name = readName(body.json());
                     storeUuid(uuid, name == null ? "" : name);
-                    yield name != null && !name.isBlank() ? Optional.of(new MojangProfile(uuid, name)) : Optional.empty();
+                    yield name != null && !name.isBlank() ? Optional.of(new Profile(uuid, name)) : Optional.empty();
                 }
-                case JsonAnswer.Missing ignored -> {
+                case Answer.Missing ignored -> {
                     storeUuid(uuid, "");
                     yield Optional.empty();
                 }
-                case JsonAnswer.Unavailable ignored -> Optional.empty();
+                case Answer.Unavailable ignored -> Optional.empty();
             };
         } catch (RuntimeException e) {
-            ModLog.LOGGER.debug("Mojang UUID lookup failed for {}", uuid, e);
+            ModLog.LOGGER.debug("UUID lookup failed for {}", uuid, e);
             return Optional.empty();
         }
     }
@@ -187,13 +192,13 @@ public final class MojangProfileApi {
     private NameAnswer fetchName(String username) {
         try {
             String encoded = URLEncoder.encode(username, StandardCharsets.UTF_8);
-            return switch (api.get(NAME_LOOKUP + encoded)) {
-                case JsonAnswer.Body body -> new NameAnswer(readProfile(body.json()), true);
-                case JsonAnswer.Missing ignored -> new NameAnswer(Optional.empty(), true);
-                case JsonAnswer.Unavailable ignored -> NameAnswer.unknown();
+            return switch (get(NAME_LOOKUP + encoded)) {
+                case Answer.Body body -> new NameAnswer(readProfile(body.json()), true);
+                case Answer.Missing ignored -> new NameAnswer(Optional.empty(), true);
+                case Answer.Unavailable ignored -> NameAnswer.unknown();
             };
         } catch (RuntimeException e) {
-            ModLog.LOGGER.debug("Mojang name lookup failed for {}", username, e);
+            ModLog.LOGGER.debug("Name lookup failed for {}", username, e);
             return NameAnswer.unknown();
         }
     }
@@ -206,19 +211,19 @@ public final class MojangProfileApi {
             return;
         }
         String key = username.toLowerCase(Locale.ROOT);
-        MojangMapping existing = nameMemory.get(key);
+        ProfileMapping existing = nameMemory.get(key);
         if (existing != null && uuid.equals(existing.uuid())) {
             uuidMemory.putIfAbsent(uuid, existing);
             return;
         }
-        MojangMapping mapping = new MojangMapping(uuid, username, Instant.now());
+        ProfileMapping mapping = new ProfileMapping(uuid, username, Instant.now());
         remember(mapping);
-        store.putCurrent(uuid, username, mapping.lastValid());
+        store.put(mapping);
     }
 
     private void storeUuid(UUID uuid, String username) {
         if (username == null || username.isBlank()) {
-            MojangMapping mapping = new MojangMapping(uuid, "", Instant.now());
+            ProfileMapping mapping = new ProfileMapping(uuid, "", Instant.now());
             remember(mapping);
             store.put(mapping);
             return;
@@ -226,8 +231,50 @@ public final class MojangProfileApi {
         rememberCurrent(uuid, username);
     }
 
+    private Answer get(String url) {
+        try {
+            limiter.acquire();
+            HttpRequest request = HttpRequest.newBuilder(URI.create(url))
+                .timeout(Duration.ofSeconds(12))
+                .header("Accept", "application/json")
+                .header("User-Agent", "HaveIPlayedWith/1.0 (https://github.com/JustAlittleWolf/HaveIPlayedWith)")
+                .GET()
+                .build();
+            HttpResponse<String> response = HTTP.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            int status = response.statusCode();
+            if (status == 204 || status == 404) {
+                return Answer.MISSING;
+            }
+            if (status / 100 != 2) {
+                ModLog.LOGGER.debug("Profile lookup returned {} for {}", status, url);
+                return Answer.UNAVAILABLE;
+            }
+            return new Answer.Body(response.body());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return Answer.UNAVAILABLE;
+        } catch (Exception e) {
+            ModLog.LOGGER.debug("Profile request failed: {}", url, e);
+            return Answer.UNAVAILABLE;
+        }
+    }
+
+    private sealed interface Answer {
+        Missing MISSING = new Missing();
+        Unavailable UNAVAILABLE = new Unavailable();
+
+        record Body(String json) implements Answer {
+        }
+
+        record Missing() implements Answer {
+        }
+
+        record Unavailable() implements Answer {
+        }
+    }
+
     /** A name lookup result, plus whether the API actually answered so it may be remembered. */
-    private record NameAnswer(Optional<MojangProfile> profile, boolean definitive) {
+    private record NameAnswer(Optional<Profile> profile, boolean definitive) {
         static NameAnswer unknown() {
             return new NameAnswer(Optional.empty(), false);
         }

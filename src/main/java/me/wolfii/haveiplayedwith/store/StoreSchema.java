@@ -9,6 +9,9 @@ import org.dizitart.no2.index.IndexType;
  * Collection names and indexes, created once when the database is opened.
  * Documents use {@link #KEY} as the unique row id. Missing strings are stored
  * as empty strings, which is what {@link StoreDb} reads back.
+ *
+ * <p>Play minutes are only stored with a server id, so a player who has
+ * played always has a most-played server.
  */
 final class StoreSchema {
     static final String KEY = "_key";
@@ -17,7 +20,7 @@ final class StoreSchema {
     static final String PLAY_DAYS = "play_days";
     static final String PLAY_SESSIONS = "play_sessions";
     static final String PLAY_SERVERS = "play_servers";
-    static final String MOJANG = "mojang";
+    static final String PROFILES = "profiles";
 
     static final String PLAYER_UUID = "player_uuid";
     static final String CURRENT_USERNAME = "current_username";
@@ -31,7 +34,6 @@ final class StoreSchema {
     static final String LAST_VALID = "last_valid";
     static final String PLAY_DAY = "play_day";
     static final String MINUTES = "minutes";
-    static final String SESSION_ID = "session_id";
     static final String SERVER_ID = "server_id";
 
     private StoreSchema() {
@@ -49,8 +51,8 @@ final class StoreSchema {
         unique(nitrite.getCollection(PLAY_SESSIONS), KEY);
         unique(nitrite.getCollection(PLAY_SERVERS), KEY);
         nonUnique(nitrite.getCollection(PLAY_SERVERS), PLAYER_UUID);
-        unique(nitrite.getCollection(MOJANG), KEY);
-        nonUnique(nitrite.getCollection(MOJANG), USERNAME_LOWER);
+        unique(nitrite.getCollection(PROFILES), KEY);
+        nonUnique(nitrite.getCollection(PROFILES), USERNAME_LOWER);
     }
 
     private static void unique(NitriteCollection collection, String field) {
