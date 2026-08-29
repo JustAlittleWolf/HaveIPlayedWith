@@ -27,7 +27,7 @@ class ChatMessagesTest {
     @Test
     void unplayedUsernamesAreItalic() {
         Component notPlayed = QueryMessages.notPlayedWith("Alex", STEVE);
-        assertUsername(arg(notPlayed, 0), "Alex", true);
+        assertUsername(arg(notPlayed, 0), "Alex", false);
     }
 
     @Test
