@@ -201,6 +201,8 @@ class PlayerStoreTest {
             assertEquals("Steve", players.recordLivePlay(uuid, "Alex", LocalDate.of(2026, 8, 2), "live:two", "hypixel.net").orElseThrow());
             assertTrue(players.recordLivePlay(uuid, "Alex", LocalDate.of(2026, 8, 2), "live:two", "hypixel.net").isEmpty());
             assertTrue(players.recordLivePlay(uuid, "alex", LocalDate.of(2026, 8, 2), "live:two", "hypixel.net").isEmpty());
+            assertEquals("Alex", players.recordLivePlay(uuid, "Steve", LocalDate.of(2026, 8, 3), "live:three", "hypixel.net").orElseThrow());
+            assertEquals("Steve", players.get(uuid).orElseThrow().currentUsername());
         }
     }
 
@@ -210,6 +212,24 @@ class PlayerStoreTest {
             UUID uuid = UUID.randomUUID();
             players.setNote(uuid, "Ghost", "met them on Discord");
             assertTrue(players.recordLivePlay(uuid, "Steve", LocalDate.of(2026, 8, 1), "live:one", "hypixel.net").isEmpty());
+        }
+    }
+
+    @Test
+    void keepsOnlyTheLastThreeDaysAndSessions() {
+        LocalDate today = LocalDate.now();
+        UUID uuid = UUID.randomUUID();
+        try (PlayerStore players = open()) {
+            for (int i = 3; i >= 0; i--) {
+                players.recordLivePlay(uuid, "Steve", today.minusDays(i), "live:" + i, "hypixel.net");
+            }
+            PlayerSnapshot snapshot = players.get(uuid).orElseThrow();
+            assertEquals(4, snapshot.totalMinutes());
+            assertEquals(4, snapshot.daysPlayed());
+            assertEquals(4, snapshot.sessionCount());
+            assertEquals(today.minusDays(1), snapshot.lastPlayedBeforeToday().orElseThrow());
+            assertEquals(0, players.sessionMinutes(uuid, "live:3"));
+            assertEquals(1, players.sessionMinutes(uuid, "live:0"));
         }
     }
 }

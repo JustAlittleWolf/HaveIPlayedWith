@@ -11,9 +11,12 @@ import org.dizitart.no2.index.IndexType;
  * as empty strings, which is what {@link StoreDb} reads back.
  *
  * <p>Play minutes are only stored with a server id, so a player who has
- * played always has a most-played server.
+ * played always has a most-played server. Each player keeps only the
+ * {@link #KEEP_RECENT} most recent play days and sessions; lifetime totals
+ * stay on the player row.
  */
 final class StoreSchema {
+    static final int KEEP_RECENT = 3;
     static final String KEY = "_key";
     static final String PLAYERS = "players";
     static final String USERNAME_HISTORY = "username_history";
@@ -28,6 +31,9 @@ final class StoreSchema {
     static final String NOTE_TAKEN_AT = "note_taken_at";
     static final String TOTAL_MINUTES = "total_minutes";
     static final String SESSION_COUNT = "session_count";
+    static final String DAYS_PLAYED = "days_played";
+    static final String RECENT_DAYS = "recent_days";
+    static final String RECENT_SESSIONS = "recent_sessions";
     static final String USERNAME_LOWER = "username_lower";
     static final String USERNAME = "username";
     static final String LAST_SEEN = "last_seen";
