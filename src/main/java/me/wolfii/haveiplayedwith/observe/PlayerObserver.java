@@ -35,8 +35,8 @@ import java.util.concurrent.ExecutorService;
  * read, API call and database write happens on one of this class' own threads.
  */
 public final class PlayerObserver {
-    /** Sightings waiting on a Mojang lookup, per the 250 entry buffer the API budget allows. */
-    private static final int MAX_LOOKUP_BUFFER = 250;
+    /** Sightings waiting on a Mojang lookup, per the 500 entry buffer the API budget allows. */
+    private static final int MAX_LOOKUP_BUFFER = 500;
     /** Sightings waiting to be classified as "needs a lookup" or "already known". */
     private static final int MAX_SIGHTING_BUFFER = 2048;
     private static final long CREDIT_MEMORY_MINUTES = 60;
