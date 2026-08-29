@@ -6,9 +6,8 @@ import me.wolfii.haveiplayedwith.ModLog;
 import me.wolfii.haveiplayedwith.http.JsonAnswer;
 import me.wolfii.haveiplayedwith.http.JsonApi;
 import me.wolfii.haveiplayedwith.http.RateLimiter;
-import me.wolfii.haveiplayedwith.store.MojangNameCache;
+import me.wolfii.haveiplayedwith.store.MojangMapping;
 import me.wolfii.haveiplayedwith.store.MojangProfileStore;
-import me.wolfii.haveiplayedwith.store.MojangUuidCache;
 
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
@@ -30,23 +29,18 @@ public final class MojangProfileApi {
     private static final String NAME_LOOKUP = "https://api.mojang.com/users/profiles/minecraft/";
     private final MojangProfileStore store;
     private final JsonApi api = new JsonApi("Mojang", new RateLimiter(25, 10, TimeUnit.SECONDS));
-    private final ConcurrentHashMap<UUID, MojangUuidCache> uuidMemory = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<String, MojangNameCache> nameMemory = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<UUID, MojangMapping> uuidMemory = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, MojangMapping> nameMemory = new ConcurrentHashMap<>();
 
     public MojangProfileApi(MojangProfileStore store) {
         this.store = store;
     }
 
-    /** False for a cached miss, where an empty username records that nobody holds the name. */
-    private static boolean resolved(String username) {
-        return username != null && !username.isBlank();
-    }
-
-    private static Optional<MojangProfile> profileOf(MojangNameCache cache) {
-        if (cache.uuid() == null || !resolved(cache.username())) {
+    private static Optional<MojangProfile> profileOf(MojangMapping mapping) {
+        if (!mapping.resolved()) {
             return Optional.empty();
         }
-        return Optional.of(new MojangProfile(cache.uuid(), cache.username()));
+        return Optional.of(new MojangProfile(mapping.uuid(), mapping.username()));
     }
 
     private static String readName(String body) {
@@ -76,38 +70,29 @@ public final class MojangProfileApi {
         return UUID.fromString(dashed);
     }
 
-    public Optional<MojangUuidCache> cached(UUID uuid) {
-        MojangUuidCache memory = uuidMemory.get(uuid);
+    public Optional<MojangMapping> cached(UUID uuid) {
+        MojangMapping memory = uuidMemory.get(uuid);
         if (memory != null) {
             return Optional.of(memory);
         }
-        Optional<MojangUuidCache> stored = store.byUuid(uuid);
-        stored.ifPresent(cache -> {
-            uuidMemory.put(uuid, cache);
-            if (resolved(cache.username())) {
-                nameMemory.putIfAbsent(
-                    cache.username().toLowerCase(Locale.ROOT),
-                    new MojangNameCache(uuid, cache.username(), cache.fetchedAt())
-                );
-            }
-        });
+        Optional<MojangMapping> stored = store.byUuid(uuid);
+        stored.ifPresent(this::remember);
         return stored;
     }
 
-    public boolean isStale(MojangUuidCache cache) {
-        return Instant.now().minus(STALE_AFTER).isAfter(cache.fetchedAt());
+    public boolean isStale(MojangMapping mapping) {
+        return Instant.now().minus(STALE_AFTER).isAfter(mapping.lastValid());
     }
 
     public boolean needsFetch(UUID uuid, String observedName) {
-        Optional<MojangUuidCache> cache = cached(uuid);
+        Optional<MojangMapping> cache = cached(uuid);
         if (cache.isEmpty()) {
             return true;
         }
-        String cachedName = cache.get().username();
-        if (resolved(cachedName) && cachedName.equalsIgnoreCase(observedName)) {
+        if (cache.get().resolved() && cache.get().username().equalsIgnoreCase(observedName)) {
             return false;
         }
-        if (resolved(cachedName)) {
+        if (cache.get().resolved()) {
             return true;
         }
         return isStale(cache.get());
@@ -119,17 +104,15 @@ public final class MojangProfileApi {
      * with fake UUIDs are not credited as players.
      */
     public boolean matchesCachedName(UUID uuid, String observedName) {
-        Optional<MojangUuidCache> cache = cached(uuid);
-        if (cache.isEmpty()) {
-            return false;
-        }
-        String cachedName = cache.get().username();
-        return resolved(cachedName) && cachedName.equalsIgnoreCase(observedName);
+        Optional<MojangMapping> cache = cached(uuid);
+        return cache.isPresent()
+            && cache.get().resolved()
+            && cache.get().username().equalsIgnoreCase(observedName);
     }
 
     public Optional<MojangProfile> lookupUuid(UUID uuid) {
-        Optional<MojangUuidCache> cache = cached(uuid);
-        if (cache.isPresent() && !isStale(cache.get()) && !resolved(cache.get().username())) {
+        Optional<MojangMapping> cache = cached(uuid);
+        if (cache.isPresent() && !isStale(cache.get()) && !cache.get().resolved()) {
             return Optional.empty();
         }
         return fetchUuid(uuid);
@@ -137,13 +120,9 @@ public final class MojangProfileApi {
 
     public Optional<MojangProfile> lookupName(String username) {
         String key = username.toLowerCase(Locale.ROOT);
-        MojangNameCache memory = nameMemory.get(key);
-        if (memory != null) {
-            return profileOf(memory);
-        }
-        Optional<MojangNameCache> stored = store.byName(key);
-        if (stored.isPresent()) {
-            return profileOf(rememberStored(key, stored.get()));
+        Optional<MojangMapping> cache = cachedName(key);
+        if (cache.isPresent() && !isStale(cache.get())) {
+            return profileOf(cache.get());
         }
         NameAnswer answer = fetchName(username);
         if (answer.definitive()) {
@@ -155,20 +134,34 @@ public final class MojangProfileApi {
         return answer.profile();
     }
 
-    /** Loads a stored mapping into memory, both directions when it resolved to an account. */
-    private MojangNameCache rememberStored(String key, MojangNameCache cache) {
-        nameMemory.put(key, cache);
-        if (cache.uuid() != null && resolved(cache.username())) {
-            uuidMemory.putIfAbsent(cache.uuid(), new MojangUuidCache(cache.username(), cache.fetchedAt()));
+    private Optional<MojangMapping> cachedName(String key) {
+        MojangMapping memory = nameMemory.get(key);
+        if (memory != null) {
+            return Optional.of(memory);
         }
-        return cache;
+        Optional<MojangMapping> stored = store.byName(key);
+        stored.ifPresent(this::remember);
+        return stored;
     }
 
-    /** Remembers that no account holds this name, so it is not looked up again. */
+    private void remember(MojangMapping mapping) {
+        if (mapping.uuid() != null) {
+            uuidMemory.put(mapping.uuid(), mapping);
+        }
+        if (mapping.resolved()) {
+            nameMemory.put(mapping.username().toLowerCase(Locale.ROOT), mapping);
+            return;
+        }
+        if (mapping.uuid() == null && mapping.username() != null && !mapping.username().isBlank()) {
+            nameMemory.put(mapping.username().toLowerCase(Locale.ROOT), mapping);
+        }
+    }
+
+    /** Remembers that no account holds this name, so it is not looked up again until stale. */
     private void rememberMissingName(String key) {
-        MojangNameCache cache = new MojangNameCache(null, "", Instant.now());
-        nameMemory.put(key, cache);
-        store.putName(key, cache);
+        MojangMapping mapping = new MojangMapping(null, key, Instant.now());
+        remember(mapping);
+        store.put(mapping);
     }
 
     private Optional<MojangProfile> fetchUuid(UUID uuid) {
@@ -177,7 +170,7 @@ public final class MojangProfileApi {
                 case JsonAnswer.Body body -> {
                     String name = readName(body.json());
                     storeUuid(uuid, name == null ? "" : name);
-                    yield resolved(name) ? Optional.of(new MojangProfile(uuid, name)) : Optional.empty();
+                    yield name != null && !name.isBlank() ? Optional.of(new MojangProfile(uuid, name)) : Optional.empty();
                 }
                 case JsonAnswer.Missing ignored -> {
                     storeUuid(uuid, "");
@@ -213,22 +206,21 @@ public final class MojangProfileApi {
             return;
         }
         String key = username.toLowerCase(Locale.ROOT);
-        MojangNameCache existing = nameMemory.get(key);
+        MojangMapping existing = nameMemory.get(key);
         if (existing != null && uuid.equals(existing.uuid())) {
-            uuidMemory.putIfAbsent(uuid, new MojangUuidCache(username, existing.fetchedAt()));
+            uuidMemory.putIfAbsent(uuid, existing);
             return;
         }
-        Instant now = Instant.now();
-        uuidMemory.put(uuid, new MojangUuidCache(username, now));
-        nameMemory.put(key, new MojangNameCache(uuid, username, now));
-        store.putCurrent(uuid, username, now);
+        MojangMapping mapping = new MojangMapping(uuid, username, Instant.now());
+        remember(mapping);
+        store.putCurrent(uuid, username, mapping.lastValid());
     }
 
     private void storeUuid(UUID uuid, String username) {
         if (username == null || username.isBlank()) {
-            MojangUuidCache cache = new MojangUuidCache("", Instant.now());
-            uuidMemory.put(uuid, cache);
-            store.putUuid(uuid, "", cache.fetchedAt());
+            MojangMapping mapping = new MojangMapping(uuid, "", Instant.now());
+            remember(mapping);
+            store.put(mapping);
             return;
         }
         rememberCurrent(uuid, username);

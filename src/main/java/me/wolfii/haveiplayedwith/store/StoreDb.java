@@ -11,9 +11,11 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.function.Consumer;
@@ -22,7 +24,9 @@ import static me.wolfii.haveiplayedwith.store.StoreSchema.CURRENT_USERNAME;
 import static me.wolfii.haveiplayedwith.store.StoreSchema.FETCHED_AT;
 import static me.wolfii.haveiplayedwith.store.StoreSchema.KEY;
 import static me.wolfii.haveiplayedwith.store.StoreSchema.LAST_SEEN;
+import static me.wolfii.haveiplayedwith.store.StoreSchema.LAST_VALID;
 import static me.wolfii.haveiplayedwith.store.StoreSchema.MINUTES;
+import static me.wolfii.haveiplayedwith.store.StoreSchema.MOJANG;
 import static me.wolfii.haveiplayedwith.store.StoreSchema.MOJANG_NAME;
 import static me.wolfii.haveiplayedwith.store.StoreSchema.MOJANG_UUID;
 import static me.wolfii.haveiplayedwith.store.StoreSchema.NAME_INDEX;
@@ -53,23 +57,20 @@ final class StoreDb implements AutoCloseable {
     private final StoreWorker worker;
     private final NitriteCollection players;
     private final NitriteCollection history;
-    private final NitriteCollection nameIndex;
     private final NitriteCollection playDays;
     private final NitriteCollection sessions;
     private final NitriteCollection playServers;
-    private final NitriteCollection mojangUuid;
-    private final NitriteCollection mojangName;
+    private final NitriteCollection mojang;
 
     private StoreDb(StoreWorker worker, Nitrite nitrite) {
         this.worker = worker;
         this.players = nitrite.getCollection(PLAYERS);
         this.history = nitrite.getCollection(USERNAME_HISTORY);
-        this.nameIndex = nitrite.getCollection(NAME_INDEX);
         this.playDays = nitrite.getCollection(PLAY_DAYS);
         this.sessions = nitrite.getCollection(PLAY_SESSIONS);
         this.playServers = nitrite.getCollection(PLAY_SERVERS);
-        this.mojangUuid = nitrite.getCollection(MOJANG_UUID);
-        this.mojangName = nitrite.getCollection(MOJANG_NAME);
+        this.mojang = nitrite.getCollection(MOJANG);
+        migrate(nitrite);
     }
 
     static StoreDb open(Path file) {
@@ -116,11 +117,11 @@ final class StoreDb implements AutoCloseable {
         }
         insert(players, id(uuid), createDocument(PLAYER_UUID, id(uuid))
             .put(CURRENT_USERNAME, username)
+            .put(USERNAME_LOWER, lower(username))
             .put(NOTE, "")
             .put(NOTE_TAKEN_AT, 0L)
             .put(TOTAL_MINUTES, 0L)
             .put(SESSION_COUNT, 0));
-        indexName(uuid, username);
     }
 
     void setNote(UUID uuid, String note, long noteTakenAt) {
@@ -131,8 +132,10 @@ final class StoreDb implements AutoCloseable {
     }
 
     void setCurrentUsername(UUID uuid, String username) {
-        update(players, id(uuid), doc -> doc.put(CURRENT_USERNAME, username));
-        indexName(uuid, username);
+        update(players, id(uuid), doc -> {
+            doc.put(CURRENT_USERNAME, username);
+            doc.put(USERNAME_LOWER, lower(username));
+        });
     }
 
     void touchUsername(UUID uuid, String username, Instant seenAt) {
@@ -140,14 +143,12 @@ final class StoreDb implements AutoCloseable {
         String key = key(id(uuid), lower(username));
         Document existing = byKey(history, key);
         if (existing != null && asLong(existing.get(LAST_SEEN)) >= millis) {
-            indexName(uuid, username);
             return;
         }
         upsert(history, key, createDocument(PLAYER_UUID, id(uuid))
             .put(USERNAME_LOWER, lower(username))
             .put(USERNAME, username)
             .put(LAST_SEEN, millis));
-        indexName(uuid, username);
     }
 
     Optional<String> previousSeenNameIfDifferent(UUID uuid, String username) {
@@ -159,9 +160,17 @@ final class StoreDb implements AutoCloseable {
     }
 
     List<PlayerSnapshot> findByName(String name) {
+        Set<UUID> ids = new LinkedHashSet<>();
+        String lower = lower(name);
+        for (Document row : history.find(where(USERNAME_LOWER).eq(lower))) {
+            ids.add(UUID.fromString(text(row, PLAYER_UUID)));
+        }
+        for (Document row : players.find(where(USERNAME_LOWER).eq(lower))) {
+            ids.add(UUID.fromString(text(row, PLAYER_UUID)));
+        }
         List<PlayerSnapshot> snapshots = new ArrayList<>();
-        for (Document row : nameIndex.find(where(USERNAME_LOWER).eq(lower(name)))) {
-            snapshot(UUID.fromString(text(row, PLAYER_UUID))).ifPresent(snapshots::add);
+        for (UUID uuid : ids) {
+            snapshot(uuid).ifPresent(snapshots::add);
         }
         return snapshots;
     }
@@ -218,57 +227,135 @@ final class StoreDb implements AutoCloseable {
         update(players, id(uuid), doc -> doc.put(TOTAL_MINUTES, asLong(doc.get(TOTAL_MINUTES)) + 1));
     }
 
-    Optional<MojangUuidCache> mojangUuid(UUID uuid) {
-        Document row = byKey(mojangUuid, id(uuid));
-        if (row == null) {
-            return Optional.empty();
+    Optional<MojangMapping> mojangByUuid(UUID uuid) {
+        return mapping(byKey(mojang, id(uuid)));
+    }
+
+    Optional<MojangMapping> mojangByName(String usernameLower) {
+        MojangMapping newest = null;
+        for (Document row : mojang.find(where(USERNAME_LOWER).eq(lower(usernameLower)))) {
+            MojangMapping mapping = mapping(row).orElse(null);
+            if (mapping == null) {
+                continue;
+            }
+            if (newest == null || mapping.lastValid().isAfter(newest.lastValid())) {
+                newest = mapping;
+            }
         }
-        return Optional.of(new MojangUuidCache(text(row, USERNAME), Instant.ofEpochMilli(asLong(row.get(FETCHED_AT)))));
+        return Optional.ofNullable(newest);
     }
 
-    void putMojangUuid(UUID uuid, String username, Instant fetchedAt) {
-        String stored = username == null ? "" : username;
-        upsert(mojangUuid, id(uuid), createDocument(PLAYER_UUID, id(uuid))
-            .put(USERNAME, stored)
-            .put(FETCHED_AT, fetchedAt.toEpochMilli()));
+    void putMojang(MojangMapping mapping) {
+        Instant lastValid = mapping.lastValid();
+        if (mapping.uuid() != null) {
+            String stored = mapping.username() == null ? "" : mapping.username();
+            String lower = stored.isBlank() ? "" : lower(stored);
+            if (!lower.isBlank()) {
+                removeKey(mojang, nameMissKey(lower));
+            }
+            upsert(mojang, id(mapping.uuid()), createDocument(PLAYER_UUID, id(mapping.uuid()))
+                .put(USERNAME, stored)
+                .put(USERNAME_LOWER, lower)
+                .put(LAST_VALID, lastValid.toEpochMilli()));
+            return;
+        }
+        String lower = mapping.username() == null ? "" : lower(mapping.username());
+        if (lower.isBlank()) {
+            return;
+        }
+        upsert(mojang, nameMissKey(lower), createDocument(PLAYER_UUID, "")
+            .put(USERNAME, "")
+            .put(USERNAME_LOWER, lower)
+            .put(LAST_VALID, lastValid.toEpochMilli()));
     }
 
-    Optional<MojangNameCache> mojangName(String usernameLower) {
-        Document row = byKey(mojangName, usernameLower);
+    private void migrate(Nitrite nitrite) {
+        for (Document row : players.find()) {
+            if (!text(row, USERNAME_LOWER).isBlank()) {
+                continue;
+            }
+            String current = text(row, CURRENT_USERNAME);
+            if (current.isBlank()) {
+                continue;
+            }
+            row.put(USERNAME_LOWER, lower(current));
+            players.update(row);
+        }
+        if (nitrite.hasCollection(MOJANG_NAME)) {
+            NitriteCollection oldNames = nitrite.getCollection(MOJANG_NAME);
+            for (Document row : oldNames.find()) {
+                putMojang(mappingFromLegacy(row, text(row, KEY)));
+            }
+            oldNames.drop();
+        }
+        if (nitrite.hasCollection(MOJANG_UUID)) {
+            NitriteCollection oldUuids = nitrite.getCollection(MOJANG_UUID);
+            for (Document row : oldUuids.find()) {
+                String rawUuid = text(row, PLAYER_UUID);
+                if (rawUuid.isBlank()) {
+                    rawUuid = text(row, KEY);
+                }
+                if (rawUuid.isBlank()) {
+                    continue;
+                }
+                putMojang(new MojangMapping(
+                    UUID.fromString(rawUuid),
+                    text(row, USERNAME),
+                    legacyInstant(row)
+                ));
+            }
+            oldUuids.drop();
+        }
+        if (nitrite.hasCollection(NAME_INDEX)) {
+            nitrite.getCollection(NAME_INDEX).drop();
+        }
+    }
+
+    private static MojangMapping mappingFromLegacy(Document row, String nameKey) {
+        String rawUuid = text(row, PLAYER_UUID);
+        String rawName = text(row, USERNAME);
+        return new MojangMapping(
+            rawUuid.isBlank() ? null : UUID.fromString(rawUuid),
+            rawUuid.isBlank() ? nameKey : rawName,
+            legacyInstant(row)
+        );
+    }
+
+    private static Instant legacyInstant(Document row) {
+        long millis = asLong(row.get(LAST_VALID));
+        if (millis == 0L) {
+            millis = asLong(row.get(FETCHED_AT));
+        }
+        return Instant.ofEpochMilli(millis);
+    }
+
+    private static Optional<MojangMapping> mapping(Document row) {
         if (row == null) {
             return Optional.empty();
         }
         String rawUuid = text(row, PLAYER_UUID);
         String rawName = text(row, USERNAME);
-        return Optional.of(new MojangNameCache(
-            rawUuid.isBlank() ? null : UUID.fromString(rawUuid),
+        Instant lastValid = Instant.ofEpochMilli(asLong(row.get(LAST_VALID)));
+        if (rawUuid.isBlank()) {
+            String lookedUp = text(row, USERNAME_LOWER);
+            return Optional.of(new MojangMapping(null, lookedUp.isBlank() ? null : lookedUp, lastValid));
+        }
+        return Optional.of(new MojangMapping(
+            UUID.fromString(rawUuid),
             rawName.isBlank() ? null : rawName,
-            Instant.ofEpochMilli(asLong(row.get(FETCHED_AT)))
+            lastValid
         ));
     }
 
-    void putMojangName(String usernameLower, MojangNameCache cache) {
-        String storedUuid = cache.uuid() == null ? "" : cache.uuid().toString();
-        String storedName = cache.username() == null ? "" : cache.username();
-        upsert(mojangName, usernameLower, createDocument(USERNAME_LOWER, usernameLower)
-            .put(PLAYER_UUID, storedUuid)
-            .put(USERNAME, storedName)
-            .put(FETCHED_AT, cache.fetchedAt().toEpochMilli()));
+    private static String nameMissKey(String usernameLower) {
+        return '\t' + usernameLower;
     }
 
-    void putMojangCurrent(UUID uuid, String username, Instant fetchedAt) {
-        putMojangUuid(uuid, username, fetchedAt);
-        putMojangName(username.toLowerCase(Locale.ROOT), new MojangNameCache(uuid, username, fetchedAt));
-    }
-
-    private void indexName(UUID uuid, String username) {
-        String lower = lower(username);
-        String id = id(uuid);
-        String key = key(lower, id);
-        if (byKey(nameIndex, key) != null) {
-            return;
+    private static void removeKey(NitriteCollection collection, String key) {
+        Document existing = byKey(collection, key);
+        if (existing != null) {
+            collection.remove(existing);
         }
-        insert(nameIndex, key, createDocument(USERNAME_LOWER, lower).put(PLAYER_UUID, id));
     }
 
     private List<SeenName> listHistory(UUID uuid) {

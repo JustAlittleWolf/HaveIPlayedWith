@@ -11,24 +11,32 @@ public final class MojangProfileStore {
         this.db = db;
     }
 
-    public Optional<MojangUuidCache> byUuid(UUID uuid) {
-        return db.call(() -> db.mojangUuid(uuid));
+    public Optional<MojangMapping> byUuid(UUID uuid) {
+        return db.call(() -> db.mojangByUuid(uuid));
     }
 
-    public void putUuid(UUID uuid, String username, Instant fetchedAt) {
-        db.run(() -> db.putMojangUuid(uuid, username, fetchedAt));
+    public Optional<MojangMapping> byName(String usernameLower) {
+        return db.call(() -> db.mojangByName(usernameLower));
     }
 
-    public Optional<MojangNameCache> byName(String usernameLower) {
-        return db.call(() -> db.mojangName(usernameLower));
+    public void put(MojangMapping mapping) {
+        db.run(() -> db.putMojang(mapping));
     }
 
-    public void putName(String usernameLower, MojangNameCache cache) {
-        db.run(() -> db.putMojangName(usernameLower, cache));
+    public void putUuid(UUID uuid, String username, Instant lastValid) {
+        put(new MojangMapping(uuid, username, lastValid));
+    }
+
+    public void putName(String usernameLower, MojangMapping mapping) {
+        if (mapping.uuid() != null) {
+            put(mapping);
+            return;
+        }
+        put(new MojangMapping(null, usernameLower, mapping.lastValid()));
     }
 
     /** Latest current-name mapping, both directions, one commit. */
-    public void putCurrent(UUID uuid, String username, Instant fetchedAt) {
-        db.run(() -> db.putMojangCurrent(uuid, username, fetchedAt));
+    public void putCurrent(UUID uuid, String username, Instant lastValid) {
+        put(new MojangMapping(uuid, username, lastValid));
     }
 }

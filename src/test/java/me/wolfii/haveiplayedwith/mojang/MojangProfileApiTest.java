@@ -1,7 +1,6 @@
 package me.wolfii.haveiplayedwith.mojang;
 
-import me.wolfii.haveiplayedwith.store.MojangNameCache;
-import me.wolfii.haveiplayedwith.store.MojangUuidCache;
+import me.wolfii.haveiplayedwith.store.MojangMapping;
 import me.wolfii.haveiplayedwith.store.PlayerStore;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -54,6 +53,20 @@ class MojangProfileApiTest {
     }
 
     @Test
+    void rememberCurrentReplacesPreviousName() {
+        UUID uuid = UUID.fromString("61699b2e-d327-4a01-9f1e-0ea8c3f06bc6");
+        try (PlayerStore players = open()) {
+            players.mojangProfiles().putCurrent(uuid, "Steve", Instant.parse("2026-08-01T00:00:00Z"));
+            players.mojangProfiles().putCurrent(uuid, "Alex", Instant.parse("2026-08-02T00:00:00Z"));
+            assertTrue(players.mojangProfiles().byName("steve").isEmpty());
+            MojangMapping current = players.mojangProfiles().byName("alex").orElseThrow();
+            assertEquals(uuid, current.uuid());
+            assertEquals(Instant.parse("2026-08-02T00:00:00Z"), current.lastValid());
+            assertEquals("Alex", players.mojangProfiles().byUuid(uuid).orElseThrow().username());
+        }
+    }
+
+    @Test
     void rememberCurrentPersistsBothDirections() {
         UUID uuid = UUID.fromString("61699b2e-d327-4a01-9f1e-0ea8c3f06bc6");
         try (PlayerStore players = open()) {
@@ -64,9 +77,9 @@ class MojangProfileApiTest {
         }
         try (PlayerStore players = open()) {
             MojangProfileApi mojang = new MojangProfileApi(players.mojangProfiles());
-            MojangUuidCache byUuid = mojang.cached(uuid).orElseThrow();
+            MojangMapping byUuid = mojang.cached(uuid).orElseThrow();
             assertEquals("Alex", byUuid.username());
-            MojangNameCache byName = players.mojangProfiles().byName("alex").orElseThrow();
+            MojangMapping byName = players.mojangProfiles().byName("alex").orElseThrow();
             assertEquals(uuid, byName.uuid());
             assertFalse(mojang.needsFetch(uuid, "alex"));
         }
