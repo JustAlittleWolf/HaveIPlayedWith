@@ -3,7 +3,6 @@ package me.wolfii.haveiplayedwith.command;
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import me.wolfii.haveiplayedwith.ModThreads;
-import me.wolfii.haveiplayedwith.importing.ImportControls;
 import me.wolfii.haveiplayedwith.mojang.MojangProfileApi;
 import me.wolfii.haveiplayedwith.observe.PlayerObserver;
 import me.wolfii.haveiplayedwith.store.PlayerStore;
@@ -14,12 +13,10 @@ import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
 import java.util.concurrent.ExecutorService;
 
 public final class HaveIPlayedWithCommands {
-    private final ImportControls imports;
     private final PlayerLookup lookup;
     private final PlayerNotes notes;
 
-    public HaveIPlayedWithCommands(PlayerStore players, MojangProfileApi mojang, ImportControls imports, PlayerObserver observer) {
-        this.imports = imports;
+    public HaveIPlayedWithCommands(PlayerStore players, MojangProfileApi mojang, PlayerObserver observer) {
         ExecutorService worker = ModThreads.singleWorker("commands");
         this.lookup = new PlayerLookup(players, mojang, worker, observer::liveSessionId);
         this.notes = new PlayerNotes(players, mojang, worker);
@@ -49,21 +46,5 @@ public final class HaveIPlayedWithCommands {
                             StringArgumentType.getString(context, "note"));
                         return 1;
                     }))));
-        var importRoot = ClientCommands.literal("importhaveiplayedwith")
-            .then(ClientCommands.literal("silence").executes(context -> {
-                imports.toggleSilenceFromCommand();
-                return 1;
-            }))
-            .then(ClientCommands.literal("stop").executes(context -> {
-                imports.stopFromCommand();
-                return 1;
-            }));
-        if (imports.hasAllTheLogs()) {
-            importRoot = importRoot.then(ClientCommands.literal("allthelogs").executes(context -> {
-                imports.startAllTheLogs();
-                return 1;
-            }));
-        }
-        dispatcher.register(importRoot);
     }
 }
