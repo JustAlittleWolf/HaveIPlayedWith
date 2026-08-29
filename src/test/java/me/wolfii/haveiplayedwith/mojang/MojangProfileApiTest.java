@@ -19,7 +19,7 @@ class MojangProfileApiTest {
     Path temp;
 
     private PlayerStore open() {
-        return new PlayerStore(temp.resolve("database"));
+        return new PlayerStore(temp.resolve("store.db"));
     }
 
     @Test

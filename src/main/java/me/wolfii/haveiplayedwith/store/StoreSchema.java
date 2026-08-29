@@ -1,106 +1,78 @@
 package me.wolfii.haveiplayedwith.store;
 
-import java.sql.Connection;
-import java.sql.SQLException;
-import java.sql.Statement;
+import org.dizitart.no2.Nitrite;
+import org.dizitart.no2.collection.NitriteCollection;
+import org.dizitart.no2.index.IndexOptions;
+import org.dizitart.no2.index.IndexType;
 
 /**
- * Table definitions, created once when the database is opened. String columns store
- * empty strings instead of SQL NULL, which is what {@link StoreDb} reads back.
+ * Collection names and indexes, created once when the database is opened.
+ * Documents use {@link #KEY} as the unique row id. Missing strings are stored
+ * as empty strings, which is what {@link StoreDb} reads back.
  */
 final class StoreSchema {
-    private static final String[] TABLES = {
-        """
-        CREATE TABLE players (
-            player_uuid VARCHAR(36) PRIMARY KEY,
-            current_username VARCHAR(64) NOT NULL,
-            note LONGVARCHAR,
-            note_taken_at BIGINT,
-            total_minutes BIGINT,
-            session_count INT
-        )
-        """,
-        """
-        CREATE TABLE username_history (
-            player_uuid VARCHAR(36),
-            username_lower VARCHAR(64),
-            username VARCHAR(64),
-            last_seen BIGINT,
-            PRIMARY KEY (player_uuid, username_lower)
-        )
-        """,
-        """
-        CREATE TABLE name_index (
-            username_lower VARCHAR(64),
-            player_uuid VARCHAR(36),
-            PRIMARY KEY (username_lower, player_uuid)
-        )
-        """,
-        """
-        CREATE TABLE play_days (
-            player_uuid VARCHAR(36),
-            play_day VARCHAR(10),
-            minutes BIGINT,
-            PRIMARY KEY (player_uuid, play_day)
-        )
-        """,
-        """
-        CREATE TABLE play_sessions (
-            player_uuid VARCHAR(36),
-            session_id LONGVARCHAR,
-            minutes BIGINT,
-            PRIMARY KEY (player_uuid, session_id)
-        )
-        """,
-        """
-        CREATE TABLE play_servers (
-            player_uuid VARCHAR(36),
-            server_id LONGVARCHAR,
-            minutes BIGINT,
-            PRIMARY KEY (player_uuid, server_id)
-        )
-        """,
-        """
-        CREATE TABLE mojang_uuid (
-            player_uuid VARCHAR(36) PRIMARY KEY,
-            username VARCHAR(64),
-            fetched_at BIGINT
-        )
-        """,
-        """
-        CREATE TABLE mojang_name (
-            username_lower VARCHAR(64) PRIMARY KEY,
-            player_uuid VARCHAR(36),
-            username VARCHAR(64),
-            fetched_at BIGINT
-        )
-        """,
-        """
-        CREATE TABLE import_progress (
-            source_id VARCHAR(64) PRIMARY KEY,
-            processed BIGINT,
-            total BIGINT,
-            last_timestamp VARCHAR(64),
-            skip_count BIGINT,
-            status VARCHAR(32),
-            silenced BIT
-        )
-        """
-    };
+    static final String KEY = "_key";
+    static final String PLAYERS = "players";
+    static final String USERNAME_HISTORY = "username_history";
+    static final String NAME_INDEX = "name_index";
+    static final String PLAY_DAYS = "play_days";
+    static final String PLAY_SESSIONS = "play_sessions";
+    static final String PLAY_SERVERS = "play_servers";
+    static final String MOJANG_UUID = "mojang_uuid";
+    static final String MOJANG_NAME = "mojang_name";
+    static final String IMPORT_PROGRESS = "import_progress";
+
+    static final String PLAYER_UUID = "player_uuid";
+    static final String CURRENT_USERNAME = "current_username";
+    static final String NOTE = "note";
+    static final String NOTE_TAKEN_AT = "note_taken_at";
+    static final String TOTAL_MINUTES = "total_minutes";
+    static final String SESSION_COUNT = "session_count";
+    static final String USERNAME_LOWER = "username_lower";
+    static final String USERNAME = "username";
+    static final String LAST_SEEN = "last_seen";
+    static final String PLAY_DAY = "play_day";
+    static final String MINUTES = "minutes";
+    static final String SESSION_ID = "session_id";
+    static final String SERVER_ID = "server_id";
+    static final String FETCHED_AT = "fetched_at";
+    static final String SOURCE_ID = "source_id";
+    static final String PROCESSED = "processed";
+    static final String TOTAL = "total";
+    static final String LAST_TIMESTAMP = "last_timestamp";
+    static final String SKIP_COUNT = "skip_count";
+    static final String STATUS = "status";
+    static final String SILENCED = "silenced";
 
     private StoreSchema() {
     }
 
-    /** Adds any table the database does not have yet, leaving existing ones untouched. */
-    static void create(Connection connection) throws SQLException {
-        for (String sql : TABLES) {
-            try (Statement statement = connection.createStatement()) {
-                statement.execute(sql);
-            } catch (SQLException e) {
-                if (e.getMessage() == null || !e.getMessage().contains("already exists")) {
-                    throw e;
-                }
-            }
+    /** Adds any collection and index the database does not have yet. */
+    static void create(Nitrite nitrite) {
+        unique(nitrite.getCollection(PLAYERS), KEY);
+        unique(nitrite.getCollection(USERNAME_HISTORY), KEY);
+        nonUnique(nitrite.getCollection(USERNAME_HISTORY), PLAYER_UUID);
+        unique(nitrite.getCollection(NAME_INDEX), KEY);
+        nonUnique(nitrite.getCollection(NAME_INDEX), USERNAME_LOWER);
+        unique(nitrite.getCollection(PLAY_DAYS), KEY);
+        nonUnique(nitrite.getCollection(PLAY_DAYS), PLAYER_UUID);
+        unique(nitrite.getCollection(PLAY_SESSIONS), KEY);
+        unique(nitrite.getCollection(PLAY_SERVERS), KEY);
+        nonUnique(nitrite.getCollection(PLAY_SERVERS), PLAYER_UUID);
+        unique(nitrite.getCollection(MOJANG_UUID), KEY);
+        unique(nitrite.getCollection(MOJANG_NAME), KEY);
+        unique(nitrite.getCollection(IMPORT_PROGRESS), KEY);
+    }
+
+    private static void unique(NitriteCollection collection, String field) {
+        if (!collection.hasIndex(field)) {
+            collection.createIndex(IndexOptions.indexOptions(IndexType.UNIQUE), field);
+        }
+    }
+
+    private static void nonUnique(NitriteCollection collection, String field) {
+        if (!collection.hasIndex(field)) {
+            collection.createIndex(IndexOptions.indexOptions(IndexType.NON_UNIQUE), field);
         }
     }
 }

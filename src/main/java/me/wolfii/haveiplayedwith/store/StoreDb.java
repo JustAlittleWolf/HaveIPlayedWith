@@ -1,53 +1,106 @@
 package me.wolfii.haveiplayedwith.store;
 
+import org.dizitart.no2.Nitrite;
+import org.dizitart.no2.collection.Document;
+import org.dizitart.no2.collection.NitriteCollection;
+import org.dizitart.no2.mvstore.MVStoreModule;
+
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.sql.Connection;
-import java.sql.DriverManager;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-import java.sql.SQLException;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
-import java.util.Properties;
 import java.util.UUID;
 import java.util.concurrent.Callable;
+import java.util.function.Consumer;
+
+import static me.wolfii.haveiplayedwith.store.StoreSchema.CURRENT_USERNAME;
+import static me.wolfii.haveiplayedwith.store.StoreSchema.FETCHED_AT;
+import static me.wolfii.haveiplayedwith.store.StoreSchema.IMPORT_PROGRESS;
+import static me.wolfii.haveiplayedwith.store.StoreSchema.KEY;
+import static me.wolfii.haveiplayedwith.store.StoreSchema.LAST_SEEN;
+import static me.wolfii.haveiplayedwith.store.StoreSchema.LAST_TIMESTAMP;
+import static me.wolfii.haveiplayedwith.store.StoreSchema.MINUTES;
+import static me.wolfii.haveiplayedwith.store.StoreSchema.MOJANG_NAME;
+import static me.wolfii.haveiplayedwith.store.StoreSchema.MOJANG_UUID;
+import static me.wolfii.haveiplayedwith.store.StoreSchema.NAME_INDEX;
+import static me.wolfii.haveiplayedwith.store.StoreSchema.NOTE;
+import static me.wolfii.haveiplayedwith.store.StoreSchema.NOTE_TAKEN_AT;
+import static me.wolfii.haveiplayedwith.store.StoreSchema.PLAYERS;
+import static me.wolfii.haveiplayedwith.store.StoreSchema.PLAYER_UUID;
+import static me.wolfii.haveiplayedwith.store.StoreSchema.PLAY_DAY;
+import static me.wolfii.haveiplayedwith.store.StoreSchema.PLAY_DAYS;
+import static me.wolfii.haveiplayedwith.store.StoreSchema.PLAY_SERVERS;
+import static me.wolfii.haveiplayedwith.store.StoreSchema.PLAY_SESSIONS;
+import static me.wolfii.haveiplayedwith.store.StoreSchema.PROCESSED;
+import static me.wolfii.haveiplayedwith.store.StoreSchema.SERVER_ID;
+import static me.wolfii.haveiplayedwith.store.StoreSchema.SESSION_COUNT;
+import static me.wolfii.haveiplayedwith.store.StoreSchema.SESSION_ID;
+import static me.wolfii.haveiplayedwith.store.StoreSchema.SILENCED;
+import static me.wolfii.haveiplayedwith.store.StoreSchema.SKIP_COUNT;
+import static me.wolfii.haveiplayedwith.store.StoreSchema.SOURCE_ID;
+import static me.wolfii.haveiplayedwith.store.StoreSchema.STATUS;
+import static me.wolfii.haveiplayedwith.store.StoreSchema.TOTAL;
+import static me.wolfii.haveiplayedwith.store.StoreSchema.TOTAL_MINUTES;
+import static me.wolfii.haveiplayedwith.store.StoreSchema.USERNAME;
+import static me.wolfii.haveiplayedwith.store.StoreSchema.USERNAME_HISTORY;
+import static me.wolfii.haveiplayedwith.store.StoreSchema.USERNAME_LOWER;
+import static org.dizitart.no2.collection.Document.createDocument;
+import static org.dizitart.no2.filters.FluentFilter.where;
 
 /**
- * SmallSQL connection and queries, over the tables {@link StoreSchema} defines. String
- * columns store empty strings instead of SQL NULL. All access goes through
- * {@link StoreWorker}.
+ * Nitrite queries over the collections {@link StoreSchema} defines. All access
+ * goes through {@link StoreWorker}. Writes stay in MVStore's memory until its
+ * auto-commit thread flushes (about a second of idle, H2's default).
  */
 final class StoreDb implements AutoCloseable {
-    private static final String DRIVER = "smallsql.database.SSDriver";
-
     private final StoreWorker worker;
-    private final Connection connection;
+    private final NitriteCollection players;
+    private final NitriteCollection history;
+    private final NitriteCollection nameIndex;
+    private final NitriteCollection playDays;
+    private final NitriteCollection sessions;
+    private final NitriteCollection playServers;
+    private final NitriteCollection mojangUuid;
+    private final NitriteCollection mojangName;
+    private final NitriteCollection imports;
 
-    private StoreDb(StoreWorker worker, Connection connection) {
+    private StoreDb(StoreWorker worker, Nitrite nitrite) {
         this.worker = worker;
-        this.connection = connection;
+        this.players = nitrite.getCollection(PLAYERS);
+        this.history = nitrite.getCollection(USERNAME_HISTORY);
+        this.nameIndex = nitrite.getCollection(NAME_INDEX);
+        this.playDays = nitrite.getCollection(PLAY_DAYS);
+        this.sessions = nitrite.getCollection(PLAY_SESSIONS);
+        this.playServers = nitrite.getCollection(PLAY_SERVERS);
+        this.mojangUuid = nitrite.getCollection(MOJANG_UUID);
+        this.mojangName = nitrite.getCollection(MOJANG_NAME);
+        this.imports = nitrite.getCollection(IMPORT_PROGRESS);
     }
 
-    static StoreDb open(Path directory) {
+    static StoreDb open(Path file) {
         try {
-            Files.createDirectories(directory.getParent());
-            Class.forName(DRIVER);
-            Properties properties = new Properties();
-            properties.setProperty("create", "true");
-            Connection connection = DriverManager.getConnection("jdbc:smallsql:" + directory.toAbsolutePath(), properties);
-            connection.setAutoCommit(false);
-            StoreDb db = new StoreDb(new StoreWorker(connection), connection);
-            StoreSchema.create(connection);
-            connection.commit();
-            return db;
+            Path parent = file.getParent();
+            if (parent != null) {
+                Files.createDirectories(parent);
+            }
+            MVStoreModule storeModule = MVStoreModule.withConfig()
+                .filePath(file.toAbsolutePath().toString())
+                .compress(true)
+                .autoCommit(true)
+                .build();
+            Nitrite nitrite = Nitrite.builder()
+                .loadModule(storeModule)
+                .openOrCreate();
+            StoreSchema.create(nitrite);
+            return new StoreDb(new StoreWorker(nitrite), nitrite);
         } catch (Exception e) {
-            throw new IllegalStateException("Failed to open HaveIPlayedWith database at " + directory, e);
+            throw new IllegalStateException("Failed to open HaveIPlayedWith database at " + file, e);
         }
     }
 
@@ -65,47 +118,46 @@ final class StoreDb implements AutoCloseable {
     }
 
     boolean hasPlayer(UUID uuid) {
-        return exists("SELECT player_uuid FROM players WHERE player_uuid = ?", id(uuid));
+        return byKey(players, id(uuid)) != null;
     }
 
     void ensurePlayer(UUID uuid, String username) {
         if (hasPlayer(uuid)) {
             return;
         }
-        execute(
-            "INSERT INTO players (player_uuid, current_username, note, note_taken_at, total_minutes, session_count) VALUES (?,?,?,?,?,?)",
-            id(uuid), username, "", 0L, 0L, 0
-        );
+        insert(players, id(uuid), createDocument(PLAYER_UUID, id(uuid))
+            .put(CURRENT_USERNAME, username)
+            .put(NOTE, "")
+            .put(NOTE_TAKEN_AT, 0L)
+            .put(TOTAL_MINUTES, 0L)
+            .put(SESSION_COUNT, 0));
         indexName(uuid, username);
     }
 
     void setNote(UUID uuid, String note, long noteTakenAt) {
-        execute("UPDATE players SET note = ?, note_taken_at = ? WHERE player_uuid = ?", note, noteTakenAt, id(uuid));
+        update(players, id(uuid), doc -> {
+            doc.put(NOTE, note);
+            doc.put(NOTE_TAKEN_AT, noteTakenAt);
+        });
     }
 
     void setCurrentUsername(UUID uuid, String username) {
-        execute("UPDATE players SET current_username = ? WHERE player_uuid = ?", username, id(uuid));
+        update(players, id(uuid), doc -> doc.put(CURRENT_USERNAME, username));
         indexName(uuid, username);
     }
 
     void touchUsername(UUID uuid, String username, Instant seenAt) {
         long millis = seenAt.toEpochMilli();
-        Long lastSeen = queryOne(
-            "SELECT last_seen FROM username_history WHERE player_uuid = ? AND username_lower = ?",
-            rs -> rs.getLong(1),
-            id(uuid),
-            lower(username)
-        );
-        if (lastSeen != null && lastSeen >= millis) {
+        String key = key(id(uuid), lower(username));
+        Document existing = byKey(history, key);
+        if (existing != null && asLong(existing.get(LAST_SEEN)) >= millis) {
             indexName(uuid, username);
             return;
         }
-        upsert(
-            "UPDATE username_history SET username = ?, last_seen = ? WHERE player_uuid = ? AND username_lower = ?",
-            List.of(username, millis, id(uuid), lower(username)),
-            "INSERT INTO username_history (player_uuid, username_lower, username, last_seen) VALUES (?,?,?,?)",
-            List.of(id(uuid), lower(username), username, millis)
-        );
+        upsert(history, key, createDocument(PLAYER_UUID, id(uuid))
+            .put(USERNAME_LOWER, lower(username))
+            .put(USERNAME, username)
+            .put(LAST_SEEN, millis));
         indexName(uuid, username);
     }
 
@@ -119,42 +171,30 @@ final class StoreDb implements AutoCloseable {
 
     List<PlayerSnapshot> findByName(String name) {
         List<PlayerSnapshot> snapshots = new ArrayList<>();
-        for (UUID uuid : queryAll(
-            "SELECT player_uuid FROM name_index WHERE username_lower = ?",
-            rs -> UUID.fromString(rs.getString(1)),
-            lower(name)
-        )) {
-            snapshot(uuid).ifPresent(snapshots::add);
+        for (Document row : nameIndex.find(where(USERNAME_LOWER).eq(lower(name)))) {
+            snapshot(UUID.fromString(text(row, PLAYER_UUID))).ifPresent(snapshots::add);
         }
         return snapshots;
     }
 
     Optional<PlayerSnapshot> snapshot(UUID uuid) {
-        PlayerFields row = queryOne(
-            "SELECT current_username, note, note_taken_at, total_minutes, session_count FROM players WHERE player_uuid = ?",
-            rs -> new PlayerFields(
-                rs.getString(1),
-                emptyIfNull(rs.getString(2)),
-                rs.getLong(3),
-                rs.getLong(4),
-                rs.getInt(5)
-            ),
-            id(uuid)
-        );
+        Document row = byKey(players, id(uuid));
         if (row == null) {
             return Optional.empty();
         }
-        Optional<String> note = Optional.of(row.note()).filter(value -> !value.isBlank());
-        Optional<Instant> noteTakenAt = note.isEmpty() || row.noteTakenAt() == 0L
+        String noteText = text(row, NOTE);
+        Optional<String> note = Optional.of(noteText).filter(value -> !value.isBlank());
+        long noteTakenAt = asLong(row.get(NOTE_TAKEN_AT));
+        Optional<Instant> takenAt = note.isEmpty() || noteTakenAt == 0L
             ? Optional.empty()
-            : Optional.of(Instant.ofEpochMilli(row.noteTakenAt()));
+            : Optional.of(Instant.ofEpochMilli(noteTakenAt));
         return Optional.of(new PlayerSnapshot(
             uuid,
-            row.currentUsername(),
+            text(row, CURRENT_USERNAME),
             note,
-            noteTakenAt,
-            row.totalMinutes(),
-            row.sessionCount(),
+            takenAt,
+            asLong(row.get(TOTAL_MINUTES)),
+            (int) asLong(row.get(SESSION_COUNT)),
             countPlayDays(uuid),
             lastPlayedBefore(uuid, LocalDate.now()),
             listHistory(uuid),
@@ -163,88 +203,88 @@ final class StoreDb implements AutoCloseable {
     }
 
     Long sessionMinutes(UUID uuid, String sessionId) {
-        return queryOne(
-            "SELECT minutes FROM play_sessions WHERE player_uuid = ? AND session_id = ?",
-            rs -> rs.getLong(1),
-            id(uuid),
-            sessionId
-        );
+        Document row = byKey(sessions, key(id(uuid), sessionId));
+        return row == null ? null : asLong(row.get(MINUTES));
     }
 
     void addSession(UUID uuid, String sessionId) {
         if (sessionMinutes(uuid, sessionId) != null) {
             return;
         }
-        execute("INSERT INTO play_sessions (player_uuid, session_id, minutes) VALUES (?,?,?)", id(uuid), sessionId, 0L);
-        execute("UPDATE players SET session_count = session_count + 1 WHERE player_uuid = ?", id(uuid));
+        insert(sessions, key(id(uuid), sessionId), createDocument(PLAYER_UUID, id(uuid))
+            .put(SESSION_ID, sessionId)
+            .put(MINUTES, 0L));
+        bumpSessionCount(uuid);
     }
 
     void addSessionMinute(UUID uuid, String sessionId) {
-        if (execute("UPDATE play_sessions SET minutes = minutes + 1 WHERE player_uuid = ? AND session_id = ?", id(uuid), sessionId) > 0) {
+        String key = key(id(uuid), sessionId);
+        if (update(sessions, key, doc -> doc.put(MINUTES, asLong(doc.get(MINUTES)) + 1))) {
             return;
         }
-        execute("INSERT INTO play_sessions (player_uuid, session_id, minutes) VALUES (?,?,?)", id(uuid), sessionId, 1L);
-        execute("UPDATE players SET session_count = session_count + 1 WHERE player_uuid = ?", id(uuid));
+        insert(sessions, key, createDocument(PLAYER_UUID, id(uuid))
+            .put(SESSION_ID, sessionId)
+            .put(MINUTES, 1L));
+        bumpSessionCount(uuid);
     }
 
     void addMinute(UUID uuid, LocalDate day, String serverId) {
-        if (execute("UPDATE play_days SET minutes = minutes + 1 WHERE player_uuid = ? AND play_day = ?", id(uuid), day.toString()) == 0) {
-            execute("INSERT INTO play_days (player_uuid, play_day, minutes) VALUES (?,?,?)", id(uuid), day.toString(), 1L);
+        String key = key(id(uuid), day.toString());
+        if (!update(playDays, key, doc -> doc.put(MINUTES, asLong(doc.get(MINUTES)) + 1))) {
+            insert(playDays, key, createDocument(PLAYER_UUID, id(uuid))
+                .put(PLAY_DAY, day.toString())
+                .put(MINUTES, 1L));
         }
         addServerMinute(uuid, serverId);
-        execute("UPDATE players SET total_minutes = total_minutes + 1 WHERE player_uuid = ?", id(uuid));
+        update(players, id(uuid), doc -> doc.put(TOTAL_MINUTES, asLong(doc.get(TOTAL_MINUTES)) + 1));
     }
 
     void ensurePlayDay(UUID uuid, LocalDate day) {
-        if (exists("SELECT player_uuid FROM play_days WHERE player_uuid = ? AND play_day = ?", id(uuid), day.toString())) {
+        String key = key(id(uuid), day.toString());
+        if (byKey(playDays, key) != null) {
             return;
         }
-        execute("INSERT INTO play_days (player_uuid, play_day, minutes) VALUES (?,?,?)", id(uuid), day.toString(), 0L);
+        insert(playDays, key, createDocument(PLAYER_UUID, id(uuid))
+            .put(PLAY_DAY, day.toString())
+            .put(MINUTES, 0L));
     }
 
     Optional<MojangUuidCache> mojangUuid(UUID uuid) {
-        return Optional.ofNullable(queryOne(
-            "SELECT username, fetched_at FROM mojang_uuid WHERE player_uuid = ?",
-            rs -> new MojangUuidCache(emptyIfNull(rs.getString(1)), Instant.ofEpochMilli(rs.getLong(2))),
-            id(uuid)
-        ));
+        Document row = byKey(mojangUuid, id(uuid));
+        if (row == null) {
+            return Optional.empty();
+        }
+        return Optional.of(new MojangUuidCache(text(row, USERNAME), Instant.ofEpochMilli(asLong(row.get(FETCHED_AT)))));
     }
 
     void putMojangUuid(UUID uuid, String username, Instant fetchedAt) {
         String stored = username == null ? "" : username;
-        upsert(
-            "UPDATE mojang_uuid SET username = ?, fetched_at = ? WHERE player_uuid = ?",
-            List.of(stored, fetchedAt.toEpochMilli(), id(uuid)),
-            "INSERT INTO mojang_uuid (player_uuid, username, fetched_at) VALUES (?,?,?)",
-            List.of(id(uuid), stored, fetchedAt.toEpochMilli())
-        );
+        upsert(mojangUuid, id(uuid), createDocument(PLAYER_UUID, id(uuid))
+            .put(USERNAME, stored)
+            .put(FETCHED_AT, fetchedAt.toEpochMilli()));
     }
 
     Optional<MojangNameCache> mojangName(String usernameLower) {
-        return Optional.ofNullable(queryOne(
-            "SELECT player_uuid, username, fetched_at FROM mojang_name WHERE username_lower = ?",
-            rs -> {
-                String rawUuid = emptyIfNull(rs.getString(1));
-                String rawName = emptyIfNull(rs.getString(2));
-                return new MojangNameCache(
-                    rawUuid.isBlank() ? null : UUID.fromString(rawUuid),
-                    rawName.isBlank() ? null : rawName,
-                    Instant.ofEpochMilli(rs.getLong(3))
-                );
-            },
-            usernameLower
+        Document row = byKey(mojangName, usernameLower);
+        if (row == null) {
+            return Optional.empty();
+        }
+        String rawUuid = text(row, PLAYER_UUID);
+        String rawName = text(row, USERNAME);
+        return Optional.of(new MojangNameCache(
+            rawUuid.isBlank() ? null : UUID.fromString(rawUuid),
+            rawName.isBlank() ? null : rawName,
+            Instant.ofEpochMilli(asLong(row.get(FETCHED_AT)))
         ));
     }
 
     void putMojangName(String usernameLower, MojangNameCache cache) {
         String storedUuid = cache.uuid() == null ? "" : cache.uuid().toString();
         String storedName = cache.username() == null ? "" : cache.username();
-        upsert(
-            "UPDATE mojang_name SET player_uuid = ?, username = ?, fetched_at = ? WHERE username_lower = ?",
-            List.of(storedUuid, storedName, cache.fetchedAt().toEpochMilli(), usernameLower),
-            "INSERT INTO mojang_name (username_lower, player_uuid, username, fetched_at) VALUES (?,?,?,?)",
-            List.of(usernameLower, storedUuid, storedName, cache.fetchedAt().toEpochMilli())
-        );
+        upsert(mojangName, usernameLower, createDocument(USERNAME_LOWER, usernameLower)
+            .put(PLAYER_UUID, storedUuid)
+            .put(USERNAME, storedName)
+            .put(FETCHED_AT, cache.fetchedAt().toEpochMilli()));
     }
 
     void putMojangCurrent(UUID uuid, String username, Instant fetchedAt) {
@@ -253,167 +293,150 @@ final class StoreDb implements AutoCloseable {
     }
 
     Optional<ImportProgress> importProgress(String source) {
-        return Optional.ofNullable(queryOne(
-            "SELECT processed, total, last_timestamp, skip_count, status, silenced FROM import_progress WHERE source_id = ?",
-            rs -> {
-                String lastTimestamp = emptyIfNull(rs.getString(3));
-                return new ImportProgress(
-                    source,
-                    rs.getLong(1),
-                    rs.getLong(2),
-                    lastTimestamp.isBlank() ? null : LocalDateTime.parse(lastTimestamp),
-                    rs.getLong(4),
-                    ImportStatus.fromStorage(rs.getString(5)),
-                    rs.getBoolean(6)
-                );
-            },
-            source
+        Document row = byKey(imports, source);
+        if (row == null) {
+            return Optional.empty();
+        }
+        String lastTimestamp = text(row, LAST_TIMESTAMP);
+        return Optional.of(new ImportProgress(
+            source,
+            asLong(row.get(PROCESSED)),
+            asLong(row.get(TOTAL)),
+            lastTimestamp.isBlank() ? null : LocalDateTime.parse(lastTimestamp),
+            asLong(row.get(SKIP_COUNT)),
+            ImportStatus.fromStorage(text(row, STATUS)),
+            asBoolean(row.get(SILENCED))
         ));
     }
 
     void saveImportProgress(ImportProgress progress) {
         String lastTimestamp = progress.lastTimestamp() == null ? "" : progress.lastTimestamp().toString();
-        String status = progress.status().storageName();
-        upsert(
-            "UPDATE import_progress SET processed = ?, total = ?, last_timestamp = ?, skip_count = ?, status = ?, silenced = ? WHERE source_id = ?",
-            List.of(progress.processed(), progress.total(), lastTimestamp, progress.skip(), status, progress.silenced(), progress.source()),
-            "INSERT INTO import_progress (source_id, processed, total, last_timestamp, skip_count, status, silenced) VALUES (?,?,?,?,?,?,?)",
-            List.of(progress.source(), progress.processed(), progress.total(), lastTimestamp, progress.skip(), status, progress.silenced())
-        );
+        upsert(imports, progress.source(), createDocument(SOURCE_ID, progress.source())
+            .put(PROCESSED, progress.processed())
+            .put(TOTAL, progress.total())
+            .put(LAST_TIMESTAMP, lastTimestamp)
+            .put(SKIP_COUNT, progress.skip())
+            .put(STATUS, progress.status().storageName())
+            .put(SILENCED, progress.silenced()));
     }
 
     private void indexName(UUID uuid, String username) {
         String lower = lower(username);
         String id = id(uuid);
-        if (exists("SELECT player_uuid FROM name_index WHERE username_lower = ? AND player_uuid = ?", lower, id)) {
+        String key = key(lower, id);
+        if (byKey(nameIndex, key) != null) {
             return;
         }
-        execute("INSERT INTO name_index (username_lower, player_uuid) VALUES (?,?)", lower, id);
+        insert(nameIndex, key, createDocument(USERNAME_LOWER, lower).put(PLAYER_UUID, id));
     }
 
     private List<SeenName> listHistory(UUID uuid) {
-        return queryAll(
-            "SELECT username, last_seen FROM username_history WHERE player_uuid = ? ORDER BY last_seen DESC",
-            rs -> new SeenName(rs.getString(1), Instant.ofEpochMilli(rs.getLong(2))),
-            id(uuid)
-        );
+        List<SeenName> names = new ArrayList<>();
+        for (Document row : history.find(where(PLAYER_UUID).eq(id(uuid)))) {
+            names.add(new SeenName(text(row, USERNAME), Instant.ofEpochMilli(asLong(row.get(LAST_SEEN)))));
+        }
+        names.sort(Comparator.comparing(SeenName::lastSeen).reversed());
+        return names;
     }
 
     private int countPlayDays(UUID uuid) {
-        Integer count = queryOne("SELECT COUNT(*) FROM play_days WHERE player_uuid = ?", rs -> rs.getInt(1), id(uuid));
-        return count == null ? 0 : count;
+        return (int) playDays.find(where(PLAYER_UUID).eq(id(uuid))).size();
     }
 
     private Optional<LocalDate> lastPlayedBefore(UUID uuid, LocalDate excluded) {
-        return Optional.ofNullable(queryOne(
-            "SELECT MAX(play_day) FROM play_days WHERE player_uuid = ? AND play_day <> ?",
-            rs -> {
-                String latest = rs.getString(1);
-                return latest == null || latest.isBlank() ? null : LocalDate.parse(latest);
-            },
-            id(uuid),
-            excluded.toString()
-        ));
+        LocalDate latest = null;
+        String skip = excluded.toString();
+        for (Document row : playDays.find(where(PLAYER_UUID).eq(id(uuid)))) {
+            String day = text(row, PLAY_DAY);
+            if (day.isBlank() || day.equals(skip)) {
+                continue;
+            }
+            LocalDate parsed = LocalDate.parse(day);
+            if (latest == null || parsed.isAfter(latest)) {
+                latest = parsed;
+            }
+        }
+        return Optional.ofNullable(latest);
     }
 
     private List<ServerPlay> listServers(UUID uuid) {
-        return queryAll(
-            "SELECT server_id, minutes FROM play_servers WHERE player_uuid = ? ORDER BY minutes DESC, server_id ASC",
-            rs -> new ServerPlay(rs.getString(1), rs.getLong(2)),
-            id(uuid)
-        );
+        List<ServerPlay> servers = new ArrayList<>();
+        for (Document row : playServers.find(where(PLAYER_UUID).eq(id(uuid)))) {
+            servers.add(new ServerPlay(text(row, SERVER_ID), asLong(row.get(MINUTES))));
+        }
+        servers.sort(Comparator.comparingLong(ServerPlay::minutes).reversed().thenComparing(ServerPlay::serverId));
+        return servers;
     }
 
     private void addServerMinute(UUID uuid, String serverId) {
         if (serverId == null || serverId.isBlank()) {
             return;
         }
-        if (execute("UPDATE play_servers SET minutes = minutes + 1 WHERE player_uuid = ? AND server_id = ?", id(uuid), serverId) == 0) {
-            execute("INSERT INTO play_servers (player_uuid, server_id, minutes) VALUES (?,?,?)", id(uuid), serverId, 1L);
+        String key = key(id(uuid), serverId);
+        if (update(playServers, key, doc -> doc.put(MINUTES, asLong(doc.get(MINUTES)) + 1))) {
+            return;
         }
+        insert(playServers, key, createDocument(PLAYER_UUID, id(uuid))
+            .put(SERVER_ID, serverId)
+            .put(MINUTES, 1L));
     }
 
-    private void upsert(String updateSql, List<Object> updateParams, String insertSql, List<Object> insertParams) {
-        if (execute(updateSql, updateParams.toArray()) == 0) {
-            execute(insertSql, insertParams.toArray());
+    private void bumpSessionCount(UUID uuid) {
+        update(players, id(uuid), doc -> doc.put(SESSION_COUNT, (int) asLong(doc.get(SESSION_COUNT)) + 1));
+    }
+
+    private static Document byKey(NitriteCollection collection, String key) {
+        return collection.find(where(KEY).eq(key)).firstOrNull();
+    }
+
+    private static void insert(NitriteCollection collection, String key, Document fields) {
+        fields.put(KEY, key);
+        collection.insert(fields);
+    }
+
+    private static boolean update(NitriteCollection collection, String key, Consumer<Document> mutator) {
+        Document existing = byKey(collection, key);
+        if (existing == null) {
+            return false;
         }
+        mutator.accept(existing);
+        collection.update(existing);
+        return true;
     }
 
-    private boolean exists(String sql, Object... params) {
-        return queryOne(sql, rs -> true, params) != null;
-    }
-
-    private int execute(String sql, Object... params) {
-        try (PreparedStatement statement = connection.prepareStatement(sql)) {
-            bind(statement, params);
-            return statement.executeUpdate();
-        } catch (SQLException e) {
-            throw wrap(e);
-        }
-    }
-
-    private <T> T queryOne(String sql, SqlMapper<T> mapper, Object... params) {
-        try (PreparedStatement statement = connection.prepareStatement(sql)) {
-            bind(statement, params);
-            try (ResultSet rows = statement.executeQuery()) {
-                return rows.next() ? mapper.map(rows) : null;
+    private static void upsert(NitriteCollection collection, String key, Document fields) {
+        if (update(collection, key, existing -> {
+            for (String field : fields.getFields()) {
+                existing.put(field, fields.get(field));
             }
-        } catch (SQLException e) {
-            throw wrap(e);
+        })) {
+            return;
         }
-    }
-
-    private <T> List<T> queryAll(String sql, SqlMapper<T> mapper, Object... params) {
-        List<T> values = new ArrayList<>();
-        try (PreparedStatement statement = connection.prepareStatement(sql)) {
-            bind(statement, params);
-            try (ResultSet rows = statement.executeQuery()) {
-                while (rows.next()) {
-                    values.add(mapper.map(rows));
-                }
-            }
-        } catch (SQLException e) {
-            throw wrap(e);
-        }
-        return values;
-    }
-
-    private static void bind(PreparedStatement statement, Object... params) throws SQLException {
-        for (int i = 0; i < params.length; i++) {
-            Object value = params[i];
-            int index = i + 1;
-            switch (value) {
-                case null -> statement.setString(index, "");
-                case String text -> statement.setString(index, text);
-                case Long number -> statement.setLong(index, number);
-                case Integer number -> statement.setInt(index, number);
-                case Boolean flag -> statement.setBoolean(index, flag);
-                default -> throw new IllegalArgumentException("unsupported SQL parameter: " + value.getClass().getName());
-            }
-        }
+        insert(collection, key, fields);
     }
 
     private static String id(UUID uuid) {
         return uuid.toString();
     }
 
+    private static String key(String left, String right) {
+        return left + '\t' + right;
+    }
+
     private static String lower(String username) {
         return username.toLowerCase(Locale.ROOT);
     }
 
-    private static String emptyIfNull(String value) {
-        return value == null ? "" : value;
+    private static String text(Document document, String field) {
+        Object value = document.get(field);
+        return value == null ? "" : String.valueOf(value);
     }
 
-    private static RuntimeException wrap(SQLException e) {
-        return new IllegalStateException(e);
+    private static long asLong(Object value) {
+        return value instanceof Number number ? number.longValue() : 0L;
     }
 
-    private record PlayerFields(String currentUsername, String note, long noteTakenAt, long totalMinutes, int sessionCount) {
-    }
-
-    @FunctionalInterface
-    private interface SqlMapper<T> {
-        T map(ResultSet rows) throws SQLException;
+    private static boolean asBoolean(Object value) {
+        return value instanceof Boolean flag ? flag : false;
     }
 }

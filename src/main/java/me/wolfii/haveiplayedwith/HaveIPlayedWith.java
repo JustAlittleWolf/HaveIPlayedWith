@@ -20,7 +20,7 @@ public class HaveIPlayedWith implements ClientModInitializer {
     @Override
     public void onInitializeClient() {
         try {
-            players = new PlayerStore(ModPaths.databaseDirectory());
+            players = new PlayerStore(ModPaths.databaseFile());
             MojangProfileApi mojang = new MojangProfileApi(players.mojangProfiles());
             CraftyPlayerApi crafty = new CraftyPlayerApi();
             observer = new PlayerObserver(players, mojang);
@@ -31,7 +31,7 @@ public class HaveIPlayedWith implements ClientModInitializer {
             }
             new HaveIPlayedWithCommands(players, mojang, imports, observer).register();
             ClientLifecycleEvents.CLIENT_STOPPING.register(client -> close());
-            ModLog.LOGGER.info("Have I Played With initialized ({})", ModPaths.databaseDirectory());
+            ModLog.LOGGER.info("Have I Played With initialized ({})", ModPaths.databaseFile());
         } catch (Exception e) {
             throw new IllegalStateException("Failed to initialize Have I Played With", e);
         }
