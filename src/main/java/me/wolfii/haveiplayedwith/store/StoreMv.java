@@ -14,12 +14,13 @@ import java.nio.file.Path;
  * H2 MVStore knobs and rewrite-compact. Nitrite opens the store with
  * {@code autoCompactFillRate(0)} because H2's background compact can race with
  * writes; this class never turns that back on. Instead it copies live pages into
- * a new file, and only when the fill rate says that copy would actually shrink
- * the file.
+ * a new file, and only when in-memory fill stats say that copy would actually
+ * shrink the file.
  *
- * <p>RocksDB and sqlite-jdbc would keep the on-disk file smaller on their own,
- * but both blow past the 1 MB mod jar budget. The live player data is small;
- * the ballooning is leftover MVStore chunks, which a rewrite reclaims.
+ * <p>{@link FileStore#getFillRate()} and {@link FileStore#getChunksFillRate()}
+ * walk the chunk-metadata map already in RAM. They do not read player documents
+ * or scan the file. A rewrite still copies live pages, so it only runs when the
+ * store has been idle and the savings are large.
  */
 final class StoreMv {
     /** Skip compact when the file is still a reasonable size. */
@@ -73,29 +74,37 @@ final class StoreMv {
         return reclaimable >= MIN_RECLAIM_BYTES && live <= MAX_LIVE_PERCENT;
     }
 
+    /**
+     * Uses the open store's in-memory file size and chunk fill rates. No document
+     * reads and no extra file open.
+     */
+    static boolean shouldCompact(Nitrite nitrite) {
+        MVStore store = unwrap(nitrite);
+        if (store == null || store.isClosed()) {
+            return false;
+        }
+        FileStore<?> files = store.getFileStore();
+        if (files == null) {
+            return false;
+        }
+        return worthRewriting(files.size(), livePercent(files));
+    }
+
+    static boolean shouldCompact(Path file, Nitrite nitrite) {
+        return shouldCompact(nitrite);
+    }
+
     static boolean shouldCompact(Path file) {
         long fileBytes = size(file);
         if (fileBytes < MIN_FILE_BYTES) {
             return false;
         }
         try (MVStore store = new MVStore.Builder().fileName(path(file)).readOnly().open()) {
-            return worthRewriting(fileBytes, livePercent(store));
+            return worthRewriting(fileBytes, livePercent(store.getFileStore()));
         } catch (Exception e) {
             ModLog.LOGGER.debug("Could not inspect HaveIPlayedWith store for compact", e);
             return false;
         }
-    }
-
-    static boolean shouldCompact(Path file, Nitrite nitrite) {
-        long fileBytes = size(file);
-        if (fileBytes < MIN_FILE_BYTES) {
-            return false;
-        }
-        MVStore store = unwrap(nitrite);
-        if (store == null || store.isClosed()) {
-            return false;
-        }
-        return worthRewriting(fileBytes, livePercent(store));
     }
 
     static void compact(Path file) {
@@ -116,8 +125,7 @@ final class StoreMv {
         }
     }
 
-    static int livePercent(MVStore store) {
-        FileStore<?> files = store.getFileStore();
+    static int livePercent(FileStore<?> files) {
         if (files == null) {
             return 100;
         }

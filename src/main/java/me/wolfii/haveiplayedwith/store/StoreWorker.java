@@ -16,11 +16,15 @@ import java.util.concurrent.TimeUnit;
  * anything still pending.
  */
 final class StoreWorker implements AutoCloseable {
-    private static final long COMPACT_PERIOD_SECONDS = 30;
+    /** How often to look at in-memory fill stats. The check itself does not read documents. */
+    private static final long COMPACT_PERIOD_SECONDS = 120;
+    /** Wait this long after the last store op so a rewrite does not stall a live tick. */
+    private static final long COMPACT_IDLE_MS = 15_000;
 
     private final ScheduledExecutorService worker = ModThreads.singleScheduledWorker("db");
     private Nitrite nitrite;
     private ScheduledFuture<?> compactTask;
+    private volatile long lastWorkMs = System.currentTimeMillis();
 
     void use(Nitrite nitrite) {
         this.nitrite = nitrite;
@@ -28,6 +32,9 @@ final class StoreWorker implements AutoCloseable {
 
     void scheduleCompact(Runnable compact) {
         compactTask = worker.scheduleWithFixedDelay(() -> {
+            if (System.currentTimeMillis() - lastWorkMs < COMPACT_IDLE_MS) {
+                return;
+            }
             try {
                 compact.run();
             } catch (RuntimeException e) {
@@ -45,6 +52,7 @@ final class StoreWorker implements AutoCloseable {
     }
 
     <T> T call(Callable<T> task) {
+        lastWorkMs = System.currentTimeMillis();
         try {
             return worker.submit(task).get();
         } catch (InterruptedException e) {

@@ -11,9 +11,12 @@ import org.dizitart.no2.index.IndexType;
  * as empty strings, which is what {@link StoreDb} reads back.
  *
  * <p>Play minutes are only stored with a server id, so a player who has
- * played always has a most-played server.
+ * played always has a most-played server. Each player keeps only the
+ * {@link #KEEP_RECENT} most recent play days and sessions; lifetime totals
+ * stay on the player row.
  */
 final class StoreSchema {
+    static final int KEEP_RECENT = 3;
     static final String KEY = "_key";
     static final String PLAYERS = "players";
     static final String USERNAME_HISTORY = "username_history";
@@ -22,12 +25,16 @@ final class StoreSchema {
     static final String PLAY_SERVERS = "play_servers";
     static final String PROFILES = "profiles";
 
-    static final String PLAYER_UUID = "player_uuid";
+    static final String UUID_HI = "uuid_hi";
+    static final String UUID_LO = "uuid_lo";
     static final String CURRENT_USERNAME = "current_username";
     static final String NOTE = "note";
     static final String NOTE_TAKEN_AT = "note_taken_at";
     static final String TOTAL_MINUTES = "total_minutes";
     static final String SESSION_COUNT = "session_count";
+    static final String DAYS_PLAYED = "days_played";
+    static final String RECENT_DAYS = "recent_days";
+    static final String RECENT_SESSIONS = "recent_sessions";
     static final String USERNAME_LOWER = "username_lower";
     static final String USERNAME = "username";
     static final String LAST_SEEN = "last_seen";
@@ -44,13 +51,13 @@ final class StoreSchema {
         unique(nitrite.getCollection(PLAYERS), KEY);
         nonUnique(nitrite.getCollection(PLAYERS), USERNAME_LOWER);
         unique(nitrite.getCollection(USERNAME_HISTORY), KEY);
-        nonUnique(nitrite.getCollection(USERNAME_HISTORY), PLAYER_UUID);
+        nonUnique(nitrite.getCollection(USERNAME_HISTORY), UUID_HI);
         nonUnique(nitrite.getCollection(USERNAME_HISTORY), USERNAME_LOWER);
         unique(nitrite.getCollection(PLAY_DAYS), KEY);
-        nonUnique(nitrite.getCollection(PLAY_DAYS), PLAYER_UUID);
+        nonUnique(nitrite.getCollection(PLAY_DAYS), UUID_HI);
         unique(nitrite.getCollection(PLAY_SESSIONS), KEY);
         unique(nitrite.getCollection(PLAY_SERVERS), KEY);
-        nonUnique(nitrite.getCollection(PLAY_SERVERS), PLAYER_UUID);
+        nonUnique(nitrite.getCollection(PLAY_SERVERS), UUID_HI);
         unique(nitrite.getCollection(PROFILES), KEY);
         nonUnique(nitrite.getCollection(PROFILES), USERNAME_LOWER);
     }
