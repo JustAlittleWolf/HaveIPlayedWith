@@ -69,7 +69,10 @@ public final class QueryMessages {
     }
 
     private static Component durationHover(PlayerSnapshot player) {
-        return hoverLines(DurationFormat.hover(player.totalMinutes()), lastPlayedHover(player));
+        return hoverLines(
+            ChatStyle.wording("haveiplayedwith.query.played_together", DurationFormat.hover(player.totalMinutes())),
+            lastPlayedHover(player)
+        );
     }
 
     private static Component lastPlayedHover(PlayerSnapshot player) {

@@ -216,19 +216,19 @@ class PlayerStoreTest {
     }
 
     @Test
-    void keepsOnlyTheLastThreeDaysAndSessions() {
+    void keepsOnlyTheLastFiveDaysAndSessions() {
         LocalDate today = LocalDate.now();
         UUID uuid = UUID.randomUUID();
         try (PlayerStore players = open()) {
-            for (int i = 3; i >= 0; i--) {
+            for (int i = 5; i >= 0; i--) {
                 players.recordLivePlay(uuid, "Steve", today.minusDays(i), "live:" + i, "hypixel.net");
             }
             PlayerSnapshot snapshot = players.get(uuid).orElseThrow();
-            assertEquals(4, snapshot.totalMinutes());
-            assertEquals(4, snapshot.daysPlayed());
-            assertEquals(4, snapshot.sessionCount());
+            assertEquals(6, snapshot.totalMinutes());
+            assertEquals(6, snapshot.daysPlayed());
+            assertEquals(6, snapshot.sessionCount());
             assertEquals(today.minusDays(1), snapshot.lastPlayedBeforeToday().orElseThrow());
-            assertEquals(0, players.sessionMinutes(uuid, "live:3"));
+            assertEquals(0, players.sessionMinutes(uuid, "live:5"));
             assertEquals(1, players.sessionMinutes(uuid, "live:0"));
         }
     }

@@ -16,7 +16,7 @@ import org.dizitart.no2.index.IndexType;
  * stay on the player row.
  */
 final class StoreSchema {
-    static final int KEEP_RECENT = 3;
+    static final int KEEP_RECENT = 5;
     static final String KEY = "_key";
     static final String PLAYERS = "players";
     static final String USERNAME_HISTORY = "username_history";

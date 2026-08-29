@@ -57,7 +57,8 @@ class ChatMessagesTest {
         assertEquals(false, duration.getStyle().isUnderlined());
         assertEquals(ChatStyle.DURATION, color(arg(duration, 0)));
         HoverEvent.ShowText durationHover = assertInstanceOf(HoverEvent.ShowText.class, duration.getStyle().getHoverEvent());
-        assertEquals("haveiplayedwith.duration.hover", key(firstSibling(durationHover.value())));
+        assertEquals("haveiplayedwith.query.played_together", key(firstSibling(durationHover.value())));
+        assertEquals("haveiplayedwith.duration.hover", key(arg(firstSibling(durationHover.value()), 0)));
         Component lastPlayed = durationHover.value().getSiblings().get(2);
         assertEquals("haveiplayedwith.query.last_played", key(lastPlayed));
         assertEquals(ChatStyle.COUNT, color(arg(lastPlayed, 0)));
@@ -118,7 +119,7 @@ class ChatMessagesTest {
     private static void assertUsername(Component name, String expected) {
         assertEquals(expected, literal(name));
         assertEquals(ChatStyle.NAME, color(name));
-        assertEquals(true, name.getStyle().isUnderlined());
+        assertEquals(false, name.getStyle().isUnderlined());
         assertInstanceOf(ClickEvent.OpenUrl.class, name.getStyle().getClickEvent());
         assertEquals(false, name.getStyle().isItalic());
     }
