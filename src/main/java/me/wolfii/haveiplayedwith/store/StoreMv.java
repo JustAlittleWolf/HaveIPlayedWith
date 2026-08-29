@@ -1,6 +1,5 @@
 package me.wolfii.haveiplayedwith.store;
 
-import me.wolfii.haveiplayedwith.ModLog;
 import org.h2.mvstore.MVStore;
 import org.h2.mvstore.MVStoreTool;
 
@@ -43,35 +42,16 @@ final class StoreMv {
                 Files.createDirectories(parent);
             }
             cleanup(file);
-            MVStore store = openStore(file);
-            if (legacyNitrite(store)) {
-                store.closeImmediately();
-                Files.deleteIfExists(file);
-                cleanup(file);
-                ModLog.LOGGER.info("Discarded incompatible HaveIPlayedWith store at {}", file);
-                store = openStore(file);
-            }
+            MVStore store = new MVStore.Builder()
+                .fileName(path(file))
+                .compressHigh()
+                .autoCommitBufferSize(2048)
+                .autoCompactFillRate(AUTO_COMPACT_FILL_RATE)
+                .open();
             store.setAutoCommitDelay(AUTO_COMMIT_DELAY_MS);
             return store;
         } catch (Exception e) {
             throw new IllegalStateException("Failed to open HaveIPlayedWith store at " + file, e);
         }
-    }
-
-    private static MVStore openStore(Path file) {
-        return new MVStore.Builder()
-            .fileName(path(file))
-            .compressHigh()
-            .autoCommitBufferSize(2048)
-            .autoCompactFillRate(AUTO_COMPACT_FILL_RATE)
-            .open();
-    }
-
-    static boolean legacyNitrite(MVStore store) {
-        return store.hasMap("$nitrite_catalog")
-            || store.hasMap("username_history")
-            || store.hasMap("play_days")
-            || store.hasMap("play_sessions")
-            || store.hasMap("play_servers");
     }
 }
