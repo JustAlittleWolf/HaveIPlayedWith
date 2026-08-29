@@ -1,12 +1,9 @@
 package me.wolfii.haveiplayedwith.chat;
 
 import me.wolfii.haveiplayedwith.store.PlayerSnapshot;
-import net.minecraft.network.chat.ClickEvent;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.HoverEvent;
 import net.minecraft.network.chat.MutableComponent;
-
-import java.util.UUID;
 
 public final class NoteMessages {
     private NoteMessages() {
@@ -24,20 +21,11 @@ public final class NoteMessages {
         return ChatStyle.wording("haveiplayedwith.note.saved", ChatStyle.username(name));
     }
 
-    public static Component noteConfirm(String name, UUID uuid) {
-        Component click = ChatStyle.clickable(
-            "haveiplayedwith.note.confirm.click",
-            new ClickEvent.RunCommand("/playernote confirm"),
-            ChatStyle.wording("haveiplayedwith.note.confirm.hover", ChatStyle.usernameText(name))
-        );
-        return ChatStyle.wording(
-            "haveiplayedwith.note.confirm",
-            ChatStyle.username(name, uuid),
-            click
-        );
+    public static Component noteCleared(String name) {
+        return ChatStyle.wording("haveiplayedwith.note.cleared", ChatStyle.username(name));
     }
 
-    public static Component nothingToConfirm() {
-        return ChatStyle.wording("haveiplayedwith.note.nothing");
+    public static Component noteMissing(String name) {
+        return ChatStyle.wording("haveiplayedwith.note.missing", ChatStyle.username(name));
     }
 }

@@ -72,13 +72,6 @@ final class ChatStyle {
         return Component.literal(name).withStyle(style -> style.withColor(rgb(NAME)));
     }
 
-    static MutableComponent clickable(String key, ClickEvent click, Component hover) {
-        return wording(key).withStyle(style -> style
-            .withUnderlined(true)
-            .withClickEvent(click)
-            .withHoverEvent(new HoverEvent.ShowText(hover)));
-    }
-
     static MutableComponent duration(Object value) {
         return data(value, DURATION);
     }
