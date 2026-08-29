@@ -81,7 +81,8 @@ class ChatMessagesTest {
     @Test
     void notesUseTheNoteColorAndCountTimestamps() {
         Component note = NoteMessages.note(snapshot());
-        Component body = arg(note, 0);
+        assertUsername(arg(note, 0), "Alex");
+        Component body = arg(note, 1);
         assertEquals("builds nice farms", literal(body));
         assertEquals(ChatStyle.NOTE, color(body));
         assertEquals(false, body.getStyle().isUnderlined());

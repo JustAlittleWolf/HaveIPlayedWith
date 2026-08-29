@@ -14,7 +14,7 @@
   "haveiplayedwith.query.past_name.hover": "Last seen as %s at %s",
   "haveiplayedwith.query.unknown_account": "Could not find a Minecraft account named %s",
   "haveiplayedwith.observe.renamed": "%s changed their name to %s",
-  "haveiplayedwith.note.label": "Note: %s",
+  "haveiplayedwith.note.label": "Note for %s: %s",
   "haveiplayedwith.note.taken": "Noted %s",
   "haveiplayedwith.note.saved": "Saved note for %s",
   "haveiplayedwith.note.cleared": "Cleared note for %s",

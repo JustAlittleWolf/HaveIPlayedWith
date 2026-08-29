@@ -14,7 +14,11 @@ public final class NoteMessages {
         player.noteTakenAt().ifPresent(takenAt -> body.withStyle(style -> style.withHoverEvent(new HoverEvent.ShowText(
             ChatStyle.wording("haveiplayedwith.note.taken", ChatStyle.count(ChatTimes.dateTime(takenAt)))
         ))));
-        return ChatStyle.wording("haveiplayedwith.note.label", body);
+        return ChatStyle.wording(
+            "haveiplayedwith.note.label",
+            ChatStyle.username(player.currentUsername(), player.uuid()),
+            body
+        );
     }
 
     public static Component noteSaved(String name) {
