@@ -20,7 +20,6 @@ final class StoreSchema {
     static final String PLAY_SERVERS = "play_servers";
     static final String MOJANG_UUID = "mojang_uuid";
     static final String MOJANG_NAME = "mojang_name";
-    static final String IMPORT_PROGRESS = "import_progress";
 
     static final String PLAYER_UUID = "player_uuid";
     static final String CURRENT_USERNAME = "current_username";
@@ -36,13 +35,6 @@ final class StoreSchema {
     static final String SESSION_ID = "session_id";
     static final String SERVER_ID = "server_id";
     static final String FETCHED_AT = "fetched_at";
-    static final String SOURCE_ID = "source_id";
-    static final String PROCESSED = "processed";
-    static final String TOTAL = "total";
-    static final String LAST_TIMESTAMP = "last_timestamp";
-    static final String SKIP_COUNT = "skip_count";
-    static final String STATUS = "status";
-    static final String SILENCED = "silenced";
 
     private StoreSchema() {
     }
@@ -61,7 +53,6 @@ final class StoreSchema {
         nonUnique(nitrite.getCollection(PLAY_SERVERS), PLAYER_UUID);
         unique(nitrite.getCollection(MOJANG_UUID), KEY);
         unique(nitrite.getCollection(MOJANG_NAME), KEY);
-        unique(nitrite.getCollection(IMPORT_PROGRESS), KEY);
     }
 
     private static void unique(NitriteCollection collection, String field) {

@@ -10,10 +10,6 @@ base {
 }
 
 repositories {
-    maven {
-        name = 'Modrinth'
-        url = 'https://api.modrinth.com/maven'
-    }
     mavenCentral()
 }
 
@@ -39,14 +35,6 @@ dependencies {
         exclude group: 'org.projectlombok'
         exclude group: 'commons-codec'
         exclude group: 'org.jasypt'
-    }
-
-    // Optional AllTheLogs API, never packaged. This coordinate is not published yet;
-    // it is always resolved from the git submodule through the includeBuild
-    // substitution in settings.gradle. Once AllTheLogs publishes to Modrinth Maven,
-    // pin a real version here and drop that includeBuild.
-    compileOnly("maven.modrinth:allthelogs:${project.all_the_logs_version}") {
-        transitive = false
     }
 
     testImplementation 'com.google.code.gson:gson:2.13.1'

@@ -105,17 +105,6 @@ class ChatMessagesTest {
     }
 
     @Test
-    void importCountsUseTheCountColor() {
-        Component progress = ImportMessages.progress(10, 40);
-        assertEquals(TextColor.GRAY.getValue(), progress.getStyle().getColor().getValue());
-        assertEquals(ChatStyle.COUNT, color(arg(progress, 0)));
-        assertEquals(ChatStyle.COUNT, color(arg(progress, 1)));
-        assertEquals(ChatStyle.COUNT, color(arg(progress, 2)));
-        assertEquals("10", literal(arg(progress, 0)));
-        assertEquals("25", literal(arg(progress, 2)));
-    }
-
-    @Test
     void notesUseTheNoteColorAndCountTimestamps() {
         Component note = NoteMessages.note(snapshot());
         Component body = arg(note, 0);

@@ -16,7 +16,7 @@ final class ChatStyle {
     static final int NAME = 0x7CFF9A;
     /** Play time, including compact and hover duration values. */
     static final int DURATION = 0x6EC8FF;
-    /** Counts (days, sessions, import progress) and calendar timestamps. */
+    /** Counts (days, sessions) and calendar timestamps. */
     static final int COUNT = 0xFFD166;
     /** Player UUIDs in hovers. */
     static final int UUID_COLOR = 0xC4B5FD;

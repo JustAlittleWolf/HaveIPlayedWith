@@ -48,30 +48,6 @@ class PlayerStoreTest {
     }
 
     @Test
-    void importDoesNotAddMinutes() {
-        try (PlayerStore players = open()) {
-            UUID uuid = UUID.randomUUID();
-            players.recordImportedSighting(uuid, "OldName", "Current", LocalDate.of(2026, 1, 1), "atl:file:a", Instant.parse("2026-01-01T12:00:00Z"));
-            PlayerSnapshot snapshot = players.get(uuid).orElseThrow();
-            assertEquals(0, snapshot.totalMinutes());
-            assertEquals(1, snapshot.daysPlayed());
-            assertEquals("Current", snapshot.currentUsername());
-            assertEquals("OldName", snapshot.pastNames().getFirst().username());
-            assertTrue(snapshot.servers().isEmpty());
-        }
-    }
-
-    @Test
-    void importOnlyRecordsTheNameThatWasSeen() {
-        try (PlayerStore players = open()) {
-            UUID uuid = UUID.randomUUID();
-            players.recordImportedSighting(uuid, "OldName", "Current", LocalDate.of(2026, 1, 1), "atl:file:a", Instant.parse("2026-01-01T12:00:00Z"));
-            List<String> seen = players.get(uuid).orElseThrow().names().stream().map(SeenName::username).toList();
-            assertEquals(List.of("OldName"), seen);
-        }
-    }
-
-    @Test
     void notesDoNotCountAsHavingPlayedTogether() {
         try (PlayerStore players = open()) {
             UUID uuid = UUID.randomUUID();
@@ -231,35 +207,11 @@ class PlayerStoreTest {
     }
 
     @Test
-    void importedPlayersAnnounceWhenFirstSeenLiveUnderANewName() {
-        try (PlayerStore players = open()) {
-            UUID uuid = UUID.randomUUID();
-            players.recordImportedSighting(uuid, "OldName", "Current", LocalDate.of(2026, 1, 1), "atl:file:a", Instant.parse("2026-01-01T12:00:00Z"));
-            assertEquals("OldName", players.recordLivePlay(uuid, "Current", LocalDate.of(2026, 8, 1), "live:one", "hypixel.net").orElseThrow());
-        }
-    }
-
-    @Test
     void notesAloneDoNotCountAsAPreviouslySeenName() {
         try (PlayerStore players = open()) {
             UUID uuid = UUID.randomUUID();
             players.setNote(uuid, "Ghost", "met them on Discord");
             assertTrue(players.recordLivePlay(uuid, "Steve", LocalDate.of(2026, 8, 1), "live:one", "hypixel.net").isEmpty());
-        }
-    }
-
-    @Test
-    void importProgressKeepsSilenceAcrossReopen() {
-        try (PlayerStore players = open()) {
-            players.importProgress().save(new ImportProgress(
-                ImportProgress.SOURCE_ALLTHELOGS, 12, 100, null, 0, ImportStatus.RUNNING, true
-            ));
-        }
-        try (PlayerStore players = open()) {
-            ImportProgress progress = players.importProgress().get(ImportProgress.SOURCE_ALLTHELOGS).orElseThrow();
-            assertEquals(12, progress.processed());
-            assertTrue(progress.silenced());
-            assertEquals(ImportStatus.RUNNING, progress.status());
         }
     }
 }
