@@ -5,7 +5,7 @@ import net.fabricmc.loader.api.FabricLoader;
 import java.nio.file.Path;
 
 /**
- * Instance-relative paths. The Nitrite file is {@code haveiplayedwith/store.db}
+ * Instance-relative paths. The store file is {@code haveiplayedwith/store.db}
  * under Fabric's config directory.
  */
 public final class ModPaths {

@@ -8,9 +8,9 @@ import java.util.Optional;
 import java.util.UUID;
 
 /**
- * Player store backed by a single Nitrite file. Reads and writes run on the
- * database thread; MVStore auto-commit flushes in the background, and leftover
- * chunks are rewritten when that would actually shrink the file.
+ * Player store backed by a compact MVStore file. Reads and writes run on the
+ * database thread. Each change is written to the map immediately; H2 auto-commit
+ * flushes and auto-compacts in the background.
  */
 public final class PlayerStore implements AutoCloseable {
     private final StoreDb db;
@@ -58,27 +58,11 @@ public final class PlayerStore implements AutoCloseable {
         if (serverId == null || serverId.isBlank()) {
             throw new IllegalArgumentException("serverId");
         }
-        return db.call(() -> {
-            Optional<String> previousName = db.previousSeenNameIfDifferent(uuid, username);
-            db.ensurePlayer(uuid, username);
-            db.touchUsername(uuid, username, Instant.now());
-            db.setCurrentUsername(uuid, username);
-            db.addSessionMinute(uuid, sessionId);
-            db.addMinute(uuid, day, serverId);
-            return previousName;
-        });
+        return db.call(() -> db.recordLivePlay(uuid, username, day, sessionId, serverId));
     }
 
     public Optional<String> applyUsername(UUID uuid, String username, Instant fetchedAt) {
-        return db.call(() -> {
-            if (!db.hasPlayer(uuid)) {
-                return Optional.empty();
-            }
-            Optional<String> previousName = db.previousSeenNameIfDifferent(uuid, username);
-            db.touchUsername(uuid, username, fetchedAt);
-            db.setCurrentUsername(uuid, username);
-            return previousName;
-        });
+        return db.call(() -> db.applyUsername(uuid, username, fetchedAt));
     }
 
     @Override

@@ -25,17 +25,8 @@ dependencies {
     implementation "net.fabricmc:fabric-loader:${project.loader_version}"
     implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
 
-    implementation("org.dizitart:nitrite-mvstore-adapter:${project.nitrite_version}") {
-        exclude group: 'org.slf4j'
-        exclude group: 'org.projectlombok'
-        exclude group: 'commons-codec'
-    }
-    packedDb("org.dizitart:nitrite-mvstore-adapter:${project.nitrite_version}") {
-        exclude group: 'org.slf4j'
-        exclude group: 'org.projectlombok'
-        exclude group: 'commons-codec'
-        exclude group: 'org.jasypt'
-    }
+    implementation("com.h2database:h2-mvstore:${project.h2_mvstore_version}")
+    packedDb("com.h2database:h2-mvstore:${project.h2_mvstore_version}")
 
     testImplementation 'com.google.code.gson:gson:2.13.1'
     testImplementation 'org.junit.jupiter:junit-jupiter:5.11.4'
@@ -85,15 +76,8 @@ jar {
         exclude 'META-INF/*.RSA'
         exclude 'META-INF/NOTICE*'
         exclude 'META-INF/LICENSE*'
-        exclude { FileTreeElement element ->
-            String path = element.relativePath.pathString.replace('\\', '/')
-            if (path.startsWith('org/dizitart/no2/index/fulltext/languages/')) {
-                return path != 'org/dizitart/no2/index/fulltext/languages/English.class'
-                    && path != 'org/dizitart/no2/index/fulltext/languages/'
-            }
-            return false
-        }
-        exclude 'org/dizitart/no2/mvstore/compat/**'
         exclude 'org/h2/mvstore/rtree/**'
+        exclude 'org/h2/mvstore/tx/**'
+        exclude 'org/h2/mvstore/db/**'
     }
 }
