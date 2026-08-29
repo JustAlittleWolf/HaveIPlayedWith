@@ -2,9 +2,11 @@ package me.wolfii.haveiplayedwith.store;
 
 import me.wolfii.haveiplayedwith.ModLog;
 import me.wolfii.haveiplayedwith.ModThreads;
+import org.dizitart.no2.Nitrite;
+import org.dizitart.no2.collection.NitriteCollection;
+import org.dizitart.no2.transaction.Session;
+import org.dizitart.no2.transaction.Transaction;
 
-import java.sql.Connection;
-import java.sql.SQLException;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -15,10 +17,16 @@ import java.util.concurrent.TimeUnit;
  */
 final class StoreWorker implements AutoCloseable {
     private final ExecutorService worker = ModThreads.singleWorker("db");
-    private final Connection connection;
+    private final Nitrite nitrite;
+    private final ThreadLocal<Transaction> currentTx = new ThreadLocal<>();
 
-    StoreWorker(Connection connection) {
-        this.connection = connection;
+    StoreWorker(Nitrite nitrite) {
+        this.nitrite = nitrite;
+    }
+
+    NitriteCollection collection(String name) {
+        Transaction tx = currentTx.get();
+        return tx != null ? tx.getCollection(name) : nitrite.getCollection(name);
     }
 
     private static RuntimeException unwrap(ExecutionException e) {
@@ -32,17 +40,24 @@ final class StoreWorker implements AutoCloseable {
     <T> T call(Callable<T> task) {
         try {
             return worker.submit(() -> {
-                try {
-                    T result = task.call();
-                    connection.commit();
-                    return result;
-                } catch (Exception e) {
-                    try {
-                        connection.rollback();
-                    } catch (SQLException rollback) {
-                        e.addSuppressed(rollback);
+                try (Session session = nitrite.createSession()) {
+                    try (Transaction tx = session.beginTransaction()) {
+                        currentTx.set(tx);
+                        try {
+                            T result = task.call();
+                            tx.commit();
+                            return result;
+                        } catch (Exception e) {
+                            try {
+                                tx.rollback();
+                            } catch (Exception rollback) {
+                                e.addSuppressed(rollback);
+                            }
+                            throw e;
+                        } finally {
+                            currentTx.remove();
+                        }
                     }
-                    throw e;
                 }
             }).get();
         } catch (InterruptedException e) {
@@ -63,28 +78,31 @@ final class StoreWorker implements AutoCloseable {
     @Override
     public void close() {
         try {
-            run(connection::commit);
-        } catch (RuntimeException e) {
-            ModLog.LOGGER.warn("Failed to commit HaveIPlayedWith database", e);
+            worker.submit(() -> {
+                nitrite.close();
+                return null;
+            }).get();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            closeQuietly();
+        } catch (Exception e) {
+            ModLog.LOGGER.warn("Failed to close HaveIPlayedWith database", e);
         }
         worker.shutdown();
         try {
             if (!worker.awaitTermination(5, TimeUnit.SECONDS)) {
                 worker.shutdownNow();
             }
-            connection.close();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            closeQuietly();
-        } catch (SQLException e) {
-            ModLog.LOGGER.warn("Failed to close HaveIPlayedWith database", e);
+            worker.shutdownNow();
         }
     }
 
     private void closeQuietly() {
         try {
-            connection.close();
-        } catch (SQLException e) {
+            nitrite.close();
+        } catch (Exception e) {
             ModLog.LOGGER.warn("Failed to close HaveIPlayedWith database", e);
         }
     }

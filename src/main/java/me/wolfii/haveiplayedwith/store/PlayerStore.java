@@ -8,7 +8,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 /**
- * Player store backed by SmallSQL. Each logical write is committed from the
+ * Player store backed by Nitrite. Each logical write is committed from the
  * database thread, not the client thread.
  */
 public final class PlayerStore implements AutoCloseable {
