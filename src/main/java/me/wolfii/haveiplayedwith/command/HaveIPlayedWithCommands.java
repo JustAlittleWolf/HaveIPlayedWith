@@ -22,7 +22,7 @@ public final class HaveIPlayedWithCommands {
         this.imports = imports;
         ExecutorService worker = ModThreads.singleWorker("commands");
         this.lookup = new PlayerLookup(players, mojang, worker, observer::liveSessionId);
-        this.notes = new PlayerNotes(players, worker);
+        this.notes = new PlayerNotes(players, mojang, worker);
     }
 
     public void register() {
