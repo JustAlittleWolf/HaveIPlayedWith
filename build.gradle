@@ -34,9 +34,6 @@ dependencies {
         exclude group: 'org.projectlombok'
         exclude group: 'commons-codec'
     }
-    // Packed into the mod jar (not nested) so the classes compress. Minecraft already
-    // provides slf4j and commons-codec. Extra Nitrite language stopwords, MVStore 3.x
-    // compat, and H2 R-trees are unused here.
     packedDb("org.dizitart:nitrite-mvstore-adapter:${project.nitrite_version}") {
         exclude group: 'org.slf4j'
         exclude group: 'org.projectlombok'
