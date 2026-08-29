@@ -20,7 +20,7 @@ public final class QueryMessages {
     }
 
     public static Component notPlayedWith(String name, UUID uuid) {
-        return ChatStyle.wording("haveiplayedwith.query.not_played", ChatStyle.username(name, uuid, true));
+        return ChatStyle.wording("haveiplayedwith.query.not_played", ChatStyle.username(name, uuid));
     }
 
     public static Component playedWith(PlayerSnapshot player) {
