@@ -206,8 +206,7 @@ public final class MojangProfileApi {
     }
 
     /**
-     * Remember who currently owns this name. Used after a Mojang fetch and after Crafty
-     * resolves a player during import, so later live play can skip the API.
+     * Remember who currently owns this name so later live play can skip the API.
      */
     public void rememberCurrent(UUID uuid, String username) {
         if (uuid == null || username == null || username.isBlank()) {

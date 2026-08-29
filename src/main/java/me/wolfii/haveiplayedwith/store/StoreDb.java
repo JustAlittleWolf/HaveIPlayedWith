@@ -9,7 +9,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.time.LocalDate;
-import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -21,10 +20,8 @@ import java.util.function.Consumer;
 
 import static me.wolfii.haveiplayedwith.store.StoreSchema.CURRENT_USERNAME;
 import static me.wolfii.haveiplayedwith.store.StoreSchema.FETCHED_AT;
-import static me.wolfii.haveiplayedwith.store.StoreSchema.IMPORT_PROGRESS;
 import static me.wolfii.haveiplayedwith.store.StoreSchema.KEY;
 import static me.wolfii.haveiplayedwith.store.StoreSchema.LAST_SEEN;
-import static me.wolfii.haveiplayedwith.store.StoreSchema.LAST_TIMESTAMP;
 import static me.wolfii.haveiplayedwith.store.StoreSchema.MINUTES;
 import static me.wolfii.haveiplayedwith.store.StoreSchema.MOJANG_NAME;
 import static me.wolfii.haveiplayedwith.store.StoreSchema.MOJANG_UUID;
@@ -37,15 +34,9 @@ import static me.wolfii.haveiplayedwith.store.StoreSchema.PLAY_DAY;
 import static me.wolfii.haveiplayedwith.store.StoreSchema.PLAY_DAYS;
 import static me.wolfii.haveiplayedwith.store.StoreSchema.PLAY_SERVERS;
 import static me.wolfii.haveiplayedwith.store.StoreSchema.PLAY_SESSIONS;
-import static me.wolfii.haveiplayedwith.store.StoreSchema.PROCESSED;
 import static me.wolfii.haveiplayedwith.store.StoreSchema.SERVER_ID;
 import static me.wolfii.haveiplayedwith.store.StoreSchema.SESSION_COUNT;
 import static me.wolfii.haveiplayedwith.store.StoreSchema.SESSION_ID;
-import static me.wolfii.haveiplayedwith.store.StoreSchema.SILENCED;
-import static me.wolfii.haveiplayedwith.store.StoreSchema.SKIP_COUNT;
-import static me.wolfii.haveiplayedwith.store.StoreSchema.SOURCE_ID;
-import static me.wolfii.haveiplayedwith.store.StoreSchema.STATUS;
-import static me.wolfii.haveiplayedwith.store.StoreSchema.TOTAL;
 import static me.wolfii.haveiplayedwith.store.StoreSchema.TOTAL_MINUTES;
 import static me.wolfii.haveiplayedwith.store.StoreSchema.USERNAME;
 import static me.wolfii.haveiplayedwith.store.StoreSchema.USERNAME_HISTORY;
@@ -68,7 +59,6 @@ final class StoreDb implements AutoCloseable {
     private final NitriteCollection playServers;
     private final NitriteCollection mojangUuid;
     private final NitriteCollection mojangName;
-    private final NitriteCollection imports;
 
     private StoreDb(StoreWorker worker, Nitrite nitrite) {
         this.worker = worker;
@@ -80,7 +70,6 @@ final class StoreDb implements AutoCloseable {
         this.playServers = nitrite.getCollection(PLAY_SERVERS);
         this.mojangUuid = nitrite.getCollection(MOJANG_UUID);
         this.mojangName = nitrite.getCollection(MOJANG_NAME);
-        this.imports = nitrite.getCollection(IMPORT_PROGRESS);
     }
 
     static StoreDb open(Path file) {
@@ -207,16 +196,6 @@ final class StoreDb implements AutoCloseable {
         return row == null ? null : asLong(row.get(MINUTES));
     }
 
-    void addSession(UUID uuid, String sessionId) {
-        if (sessionMinutes(uuid, sessionId) != null) {
-            return;
-        }
-        insert(sessions, key(id(uuid), sessionId), createDocument(PLAYER_UUID, id(uuid))
-            .put(SESSION_ID, sessionId)
-            .put(MINUTES, 0L));
-        bumpSessionCount(uuid);
-    }
-
     void addSessionMinute(UUID uuid, String sessionId) {
         String key = key(id(uuid), sessionId);
         if (update(sessions, key, doc -> doc.put(MINUTES, asLong(doc.get(MINUTES)) + 1))) {
@@ -237,16 +216,6 @@ final class StoreDb implements AutoCloseable {
         }
         addServerMinute(uuid, serverId);
         update(players, id(uuid), doc -> doc.put(TOTAL_MINUTES, asLong(doc.get(TOTAL_MINUTES)) + 1));
-    }
-
-    void ensurePlayDay(UUID uuid, LocalDate day) {
-        String key = key(id(uuid), day.toString());
-        if (byKey(playDays, key) != null) {
-            return;
-        }
-        insert(playDays, key, createDocument(PLAYER_UUID, id(uuid))
-            .put(PLAY_DAY, day.toString())
-            .put(MINUTES, 0L));
     }
 
     Optional<MojangUuidCache> mojangUuid(UUID uuid) {
@@ -290,34 +259,6 @@ final class StoreDb implements AutoCloseable {
     void putMojangCurrent(UUID uuid, String username, Instant fetchedAt) {
         putMojangUuid(uuid, username, fetchedAt);
         putMojangName(username.toLowerCase(Locale.ROOT), new MojangNameCache(uuid, username, fetchedAt));
-    }
-
-    Optional<ImportProgress> importProgress(String source) {
-        Document row = byKey(imports, source);
-        if (row == null) {
-            return Optional.empty();
-        }
-        String lastTimestamp = text(row, LAST_TIMESTAMP);
-        return Optional.of(new ImportProgress(
-            source,
-            asLong(row.get(PROCESSED)),
-            asLong(row.get(TOTAL)),
-            lastTimestamp.isBlank() ? null : LocalDateTime.parse(lastTimestamp),
-            asLong(row.get(SKIP_COUNT)),
-            ImportStatus.fromStorage(text(row, STATUS)),
-            asBoolean(row.get(SILENCED))
-        ));
-    }
-
-    void saveImportProgress(ImportProgress progress) {
-        String lastTimestamp = progress.lastTimestamp() == null ? "" : progress.lastTimestamp().toString();
-        upsert(imports, progress.source(), createDocument(SOURCE_ID, progress.source())
-            .put(PROCESSED, progress.processed())
-            .put(TOTAL, progress.total())
-            .put(LAST_TIMESTAMP, lastTimestamp)
-            .put(SKIP_COUNT, progress.skip())
-            .put(STATUS, progress.status().storageName())
-            .put(SILENCED, progress.silenced()));
     }
 
     private void indexName(UUID uuid, String username) {
@@ -434,9 +375,5 @@ final class StoreDb implements AutoCloseable {
 
     private static long asLong(Object value) {
         return value instanceof Number number ? number.longValue() : 0L;
-    }
-
-    private static boolean asBoolean(Object value) {
-        return value instanceof Boolean flag ? flag : false;
     }
 }

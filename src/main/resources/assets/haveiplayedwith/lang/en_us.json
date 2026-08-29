@@ -32,20 +32,5 @@
   "haveiplayedwith.duration.day": "%s day",
   "haveiplayedwith.duration.days.count": "%s days",
   "haveiplayedwith.duration.hover": "%s:%s",
-  "haveiplayedwith.duration.hover.with_days": "%s, %s",
-  "haveiplayedwith.import.not_running": "No AllTheLogs import is running",
-  "haveiplayedwith.import.stopping": "Stopping AllTheLogs import...",
-  "haveiplayedwith.import.silenced": "AllTheLogs import progress messages silenced",
-  "haveiplayedwith.import.unsilenced": "AllTheLogs import progress messages enabled",
-  "haveiplayedwith.import.still_running.counts": "AllTheLogs import is still running (%s/%s)",
-  "haveiplayedwith.import.still_running.messages": "AllTheLogs import is still running (%s messages)",
-  "haveiplayedwith.import.stopped": "AllTheLogs import stopped (%s messages)",
-  "haveiplayedwith.import.resuming": "Resuming AllTheLogs import...",
-  "haveiplayedwith.import.already_running": "AllTheLogs import is already running",
-  "haveiplayedwith.import.starting": "Starting AllTheLogs import in the background",
-  "haveiplayedwith.import.not_ready": "AllTheLogs is not ready yet. The import will retry next launch",
-  "haveiplayedwith.import.finished": "AllTheLogs import finished (%s messages)",
-  "haveiplayedwith.import.failed": "AllTheLogs import failed. It will resume next launch",
-  "haveiplayedwith.import.progress.counts": "AllTheLogs import: %s/%s (%s%%)",
-  "haveiplayedwith.import.progress.messages": "AllTheLogs import: %s messages..."
+  "haveiplayedwith.duration.hover.with_days": "%s, %s"
 }

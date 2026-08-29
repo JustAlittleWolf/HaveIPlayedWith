@@ -14,20 +14,14 @@ import java.util.UUID;
 public final class PlayerStore implements AutoCloseable {
     private final StoreDb db;
     private final MojangProfileStore mojangProfiles;
-    private final ImportProgressStore importProgress;
 
     public PlayerStore(Path file) {
         this.db = StoreDb.open(file);
         this.mojangProfiles = new MojangProfileStore(db);
-        this.importProgress = new ImportProgressStore(db);
     }
 
     public MojangProfileStore mojangProfiles() {
         return mojangProfiles;
-    }
-
-    public ImportProgressStore importProgress() {
-        return importProgress;
     }
 
     public List<PlayerSnapshot> findByName(String name) {
@@ -68,23 +62,6 @@ public final class PlayerStore implements AutoCloseable {
             db.addSessionMinute(uuid, sessionId);
             db.addMinute(uuid, day, serverId);
             return previousName;
-        });
-    }
-
-    /**
-     * Only {@code seenUsername} enters the name history: the name Crafty reports as current was
-     * never actually seen by this player, so it gets no "last seen" timestamp.
-     */
-    public void recordImportedSighting(UUID uuid, String seenUsername, String currentUsername, LocalDate day, String sessionId, Instant seenAt) {
-        db.run(() -> {
-            String display = currentUsername == null || currentUsername.isBlank() ? seenUsername : currentUsername;
-            db.ensurePlayer(uuid, display);
-            if (currentUsername != null && !currentUsername.isBlank()) {
-                db.setCurrentUsername(uuid, currentUsername);
-            }
-            db.touchUsername(uuid, seenUsername, seenAt);
-            db.addSession(uuid, sessionId);
-            db.ensurePlayDay(uuid, day);
         });
     }
 
