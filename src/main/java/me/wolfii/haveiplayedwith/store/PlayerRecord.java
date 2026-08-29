@@ -10,10 +10,12 @@ import java.util.UUID;
 
 /**
  * One player’s live row. Lifetime totals stay here; only the last
- * {@link #KEEP_RECENT} play days and sessions are kept.
+ * {@link #KEEP_RECENT} play days and sessions are kept. Server and past-name
+ * lists stay within {@link #KEEP_HISTORY} so the on-disk count byte cannot wrap.
  */
 final class PlayerRecord {
     static final int KEEP_RECENT = 5;
+    static final int KEEP_HISTORY = 255;
 
     final UUID uuid;
     String username = "";
@@ -53,6 +55,9 @@ final class PlayerRecord {
         }
         names.removeIf(name -> name.username().equalsIgnoreCase(username));
         names.addFirst(new SeenName(username, seenAt));
+        while (names.size() > KEEP_HISTORY) {
+            names.removeLast();
+        }
     }
 
     void credit(LocalDate day, String sessionId, String serverId) {
@@ -142,6 +147,17 @@ final class PlayerRecord {
             }
         }
         servers.add(new ServerPlay(serverId, 1L));
+        if (servers.size() > KEEP_HISTORY) {
+            int drop = 0;
+            for (int i = 1; i < servers.size(); i++) {
+                if (servers.get(i).minutes() < servers.get(drop).minutes()
+                    || (servers.get(i).minutes() == servers.get(drop).minutes()
+                        && servers.get(i).serverId().compareTo(servers.get(drop).serverId()) > 0)) {
+                    drop = i;
+                }
+            }
+            servers.remove(drop);
+        }
     }
 
     private void addSessionMinute(String sessionId) {

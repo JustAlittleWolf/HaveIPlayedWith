@@ -9,8 +9,8 @@ import java.util.UUID;
 
 /**
  * Player store backed by a compact MVStore file. Reads and writes run on the
- * database thread. Live minute ticks stay in memory until a periodic flush;
- * leftover chunks are rewritten when that would actually shrink the file.
+ * database thread. Each change is written to the map immediately; H2 auto-commit
+ * flushes and auto-compacts in the background.
  */
 public final class PlayerStore implements AutoCloseable {
     private final StoreDb db;

@@ -1,7 +1,6 @@
 package me.wolfii.haveiplayedwith.store;
 
 import me.wolfii.haveiplayedwith.ModLog;
-import org.h2.mvstore.FileStore;
 import org.h2.mvstore.MVStore;
 import org.h2.mvstore.MVStoreTool;
 
@@ -9,20 +8,14 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 /**
- * H2 MVStore knobs and rewrite-compact. Background compact is left off
- * ({@code autoCompactFillRate(0)}) because it can race with writes. Leftover
- * chunks are copied into a new file only when in-memory fill stats say that
- * rewrite would actually shrink the file.
+ * Opens the MVStore file. H2 auto-commits and auto-compacts on its writer
+ * thread; this class does not rewrite the file.
  */
 final class StoreMv {
-    /** Skip compact when the file is still a reasonable size. */
-    static final long MIN_FILE_BYTES = 1024L * 1024L;
-    /** Skip compact unless at least this many bytes would be reclaimed. */
-    static final long MIN_RECLAIM_BYTES = 1024L * 1024L;
-    /** Skip compact when chunks are already at least this percent live. */
-    static final int MAX_LIVE_PERCENT = 50;
-    /** Longer delay means fewer copy-on-write chunks for the same dirty maps. */
+    /** Batches a tab-list burst into one copy-on-write generation. */
     static final int AUTO_COMMIT_DELAY_MS = 10_000;
+    /** H2 default. Sparse leftover chunks are reclaimed on the auto-commit thread. */
+    static final int AUTO_COMPACT_FILL_RATE = 50;
 
     private StoreMv() {
     }
@@ -50,12 +43,14 @@ final class StoreMv {
                 Files.createDirectories(parent);
             }
             cleanup(file);
-            MVStore store = new MVStore.Builder()
-                .fileName(path(file))
-                .compressHigh()
-                .autoCommitBufferSize(2048)
-                .autoCompactFillRate(0)
-                .open();
+            MVStore store = openStore(file);
+            if (legacyNitrite(store)) {
+                store.closeImmediately();
+                Files.deleteIfExists(file);
+                cleanup(file);
+                ModLog.LOGGER.info("Discarded incompatible HaveIPlayedWith store at {}", file);
+                store = openStore(file);
+            }
             store.setAutoCommitDelay(AUTO_COMMIT_DELAY_MS);
             return store;
         } catch (Exception e) {
@@ -63,51 +58,20 @@ final class StoreMv {
         }
     }
 
-    /**
-     * True when a rewrite would drop at least {@link #MIN_RECLAIM_BYTES} and the
-     * file is already larger than {@link #MIN_FILE_BYTES}.
-     */
-    static boolean worthRewriting(long fileBytes, int livePercent) {
-        if (fileBytes < MIN_FILE_BYTES) {
-            return false;
-        }
-        int live = Math.max(0, Math.min(livePercent, 100));
-        long reclaimable = fileBytes - fileBytes * live / 100L;
-        return reclaimable >= MIN_RECLAIM_BYTES && live <= MAX_LIVE_PERCENT;
+    private static MVStore openStore(Path file) {
+        return new MVStore.Builder()
+            .fileName(path(file))
+            .compressHigh()
+            .autoCommitBufferSize(2048)
+            .autoCompactFillRate(AUTO_COMPACT_FILL_RATE)
+            .open();
     }
 
-    static boolean shouldCompact(MVStore store) {
-        if (store == null || store.isClosed()) {
-            return false;
-        }
-        FileStore<?> files = store.getFileStore();
-        if (files == null) {
-            return false;
-        }
-        return worthRewriting(files.size(), livePercent(files));
-    }
-
-    static boolean shouldCompact(Path file) {
-        long fileBytes = size(file);
-        if (fileBytes < MIN_FILE_BYTES) {
-            return false;
-        }
-        try (MVStore store = new MVStore.Builder().fileName(path(file)).readOnly().open()) {
-            return worthRewriting(fileBytes, livePercent(store.getFileStore()));
-        } catch (Exception e) {
-            ModLog.LOGGER.debug("Could not inspect HaveIPlayedWith store for compact", e);
-            return false;
-        }
-    }
-
-    static void compact(Path file) {
-        MVStoreTool.compact(path(file), true);
-    }
-
-    static int livePercent(FileStore<?> files) {
-        if (files == null) {
-            return 100;
-        }
-        return Math.min(files.getFillRate(), files.getChunksFillRate());
+    static boolean legacyNitrite(MVStore store) {
+        return store.hasMap("$nitrite_catalog")
+            || store.hasMap("username_history")
+            || store.hasMap("play_days")
+            || store.hasMap("play_sessions")
+            || store.hasMap("play_servers");
     }
 }

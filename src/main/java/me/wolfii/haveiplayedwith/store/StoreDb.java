@@ -20,36 +20,29 @@ import java.util.UUID;
 import java.util.concurrent.Callable;
 
 /**
- * Player and profile rows in one MVStore file. Live minute ticks mutate in-memory
- * {@link PlayerRecord}s and are written on a timer, so MVStore is not copy-on-write
- * rewritten every calendar minute.
+ * Player and profile rows in one MVStore file. Each mutation is written to the
+ * map immediately; H2 auto-commit flushes and auto-compacts in the background.
  */
 final class StoreDb implements AutoCloseable {
     private static final MVMap.Builder<byte[], byte[]> BYTES = new MVMap.Builder<byte[], byte[]>()
         .keyType(ByteArrayDataType.INSTANCE)
         .valueType(ByteArrayDataType.INSTANCE);
 
-    private final Path file;
     private final StoreWorker worker;
     private MVStore store;
     private MVMap<byte[], byte[]> players;
     private MVMap<byte[], byte[]> profiles;
     private MVMap<byte[], byte[]> misses;
-    private final Map<UUID, PlayerRecord> cache = new HashMap<>();
-    private final Set<UUID> dirty = new HashSet<>();
+    private final Map<UUID, PlayerRecord> live = new HashMap<>();
 
-    private StoreDb(Path file, StoreWorker worker, MVStore store) {
-        this.file = file;
+    private StoreDb(StoreWorker worker, MVStore store) {
         this.worker = worker;
         bind(store);
     }
 
     static StoreDb open(Path file) {
         try {
-            StoreDb db = new StoreDb(file, new StoreWorker(), StoreMv.open(file));
-            db.worker.scheduleFlush(db::flushPending);
-            db.worker.scheduleCompact(db::compactIfWorthwhile);
-            return db;
+            return new StoreDb(new StoreWorker(), StoreMv.open(file));
         } catch (Exception e) {
             throw new IllegalStateException("Failed to open HaveIPlayedWith database at " + file, e);
         }
@@ -60,53 +53,8 @@ final class StoreDb implements AutoCloseable {
         this.players = store.openMap("players", BYTES);
         this.profiles = store.openMap("profiles", BYTES);
         this.misses = store.openMap("misses", BYTES);
-        cache.clear();
-        dirty.clear();
+        live.clear();
         worker.use(store);
-    }
-
-    /**
-     * Rewrites the store file onto the database thread when leftover MVStore
-     * chunks would actually shrink it. Maps are rebound after the copy.
-     */
-    void compactIfWorthwhile() {
-        if (!StoreMv.shouldCompact(store)) {
-            return;
-        }
-        flushPending();
-        long before = StoreMv.size(file);
-        try {
-            store.commit();
-            store.close();
-        } catch (Exception e) {
-            ModLog.LOGGER.warn("Failed to close HaveIPlayedWith store before compact", e);
-            try {
-                bind(StoreMv.open(file));
-            } catch (Exception reopen) {
-                e.addSuppressed(reopen);
-                throw new IllegalStateException("Failed to reopen HaveIPlayedWith store after compact close", e);
-            }
-            return;
-        }
-        try {
-            StoreMv.compact(file);
-        } catch (Exception e) {
-            ModLog.LOGGER.warn("HaveIPlayedWith store compact failed", e);
-            StoreMv.cleanup(file);
-        }
-        bind(StoreMv.open(file));
-        long after = StoreMv.size(file);
-        if (after < before) {
-            ModLog.LOGGER.info("Compacted HaveIPlayedWith store from {} to {} bytes", before, after);
-        }
-    }
-
-    boolean hasReclaimableSpace() {
-        return StoreMv.shouldCompact(store);
-    }
-
-    void commit() {
-        store.commit();
     }
 
     <T> T call(Callable<T> task) {
@@ -120,7 +68,6 @@ final class StoreDb implements AutoCloseable {
     @Override
     public void close() {
         worker.close(() -> {
-            flushPending();
             if (store != null && !store.isClosed()) {
                 store.close();
             }
@@ -128,7 +75,7 @@ final class StoreDb implements AutoCloseable {
     }
 
     boolean hasPlayer(UUID uuid) {
-        return cache.containsKey(uuid) || players.containsKey(StoreCodec.uuidBytes(uuid));
+        return live.containsKey(uuid) || players.containsKey(StoreCodec.uuidBytes(uuid));
     }
 
     void ensurePlayer(UUID uuid, String username) {
@@ -137,14 +84,13 @@ final class StoreDb implements AutoCloseable {
         }
         PlayerRecord player = new PlayerRecord(uuid);
         player.setCurrentUsername(username);
-        cache.put(uuid, player);
-        dirty.add(uuid);
+        save(player);
     }
 
     void setNote(UUID uuid, String note, long noteTakenAt) {
         PlayerRecord player = player(uuid);
         player.setNote(note, noteTakenAt);
-        dirty.add(uuid);
+        save(player);
     }
 
     Optional<String> recordLivePlay(UUID uuid, String username, LocalDate day, String sessionId, String serverId) {
@@ -156,8 +102,7 @@ final class StoreDb implements AutoCloseable {
         player.setCurrentUsername(username);
         player.touchName(username, Instant.now());
         player.credit(day, sessionId, serverId);
-        cache.put(uuid, player);
-        dirty.add(uuid);
+        save(player);
         return previousName;
     }
 
@@ -169,14 +114,26 @@ final class StoreDb implements AutoCloseable {
         Optional<String> previousName = player.previousNameIfDifferent(username);
         player.touchName(username, fetchedAt);
         player.setCurrentUsername(username);
-        dirty.add(uuid);
+        save(player);
         return previousName;
     }
 
     List<PlayerSnapshot> findByName(String name) {
         String lower = name.toLowerCase(Locale.ROOT);
         List<PlayerSnapshot> snapshots = new ArrayList<>();
-        for (PlayerRecord player : allPlayers()) {
+        Set<UUID> seen = new HashSet<>();
+        for (PlayerRecord player : live.values()) {
+            seen.add(player.uuid);
+            if (player.matchesName(lower)) {
+                snapshots.add(player.snapshot());
+            }
+        }
+        for (Map.Entry<byte[], byte[]> row : players.entrySet()) {
+            UUID uuid = StoreCodec.uuid(row.getKey());
+            if (!seen.add(uuid)) {
+                continue;
+            }
+            PlayerRecord player = StoreCodec.decodePlayer(uuid, row.getValue());
             if (player.matchesName(lower)) {
                 snapshots.add(player.snapshot());
             }
@@ -245,37 +202,23 @@ final class StoreDb implements AutoCloseable {
         misses.put(StoreCodec.nameKey(lower), StoreCodec.encodeMillis(lastValid.toEpochMilli()));
     }
 
-    void flushPending() {
-        if (dirty.isEmpty()) {
-            return;
+    private void save(PlayerRecord player) {
+        live.put(player.uuid, player);
+        try {
+            players.put(StoreCodec.uuidBytes(player.uuid), StoreCodec.encodePlayer(player));
+        } catch (RuntimeException e) {
+            ModLog.LOGGER.warn("Failed to encode HaveIPlayedWith player {}", player.uuid, e);
         }
-        for (UUID uuid : dirty) {
-            PlayerRecord player = cache.get(uuid);
-            if (player != null) {
-                players.put(StoreCodec.uuidBytes(uuid), StoreCodec.encodePlayer(player));
-            }
-        }
-        dirty.clear();
-        store.commit();
     }
 
     private PlayerRecord player(UUID uuid) {
-        PlayerRecord cached = cache.get(uuid);
+        PlayerRecord cached = live.get(uuid);
         if (cached != null) {
             return cached;
         }
         byte[] stored = players.get(StoreCodec.uuidBytes(uuid));
         PlayerRecord player = stored == null ? new PlayerRecord(uuid) : StoreCodec.decodePlayer(uuid, stored);
-        cache.put(uuid, player);
+        live.put(uuid, player);
         return player;
-    }
-
-    private List<PlayerRecord> allPlayers() {
-        Map<UUID, PlayerRecord> all = new HashMap<>(cache);
-        for (byte[] key : players.keySet()) {
-            UUID uuid = StoreCodec.uuid(key);
-            all.putIfAbsent(uuid, player(uuid));
-        }
-        return List.copyOf(all.values());
     }
 }
