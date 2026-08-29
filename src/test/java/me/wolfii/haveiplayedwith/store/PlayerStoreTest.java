@@ -130,18 +130,21 @@ class PlayerStoreTest {
 
     @Test
     void persistsMojangNameLookups() {
+        UUID uuid = UUID.fromString("61699b2e-d327-4a01-9f1e-0ea8c3f06bc6");
+        Instant lastValid = Instant.parse("2026-08-01T00:00:00Z");
         try (PlayerStore players = open()) {
-            UUID uuid = UUID.fromString("61699b2e-d327-4a01-9f1e-0ea8c3f06bc6");
-            players.mojangProfiles().putName("steve", new MojangNameCache(uuid, "Steve", Instant.parse("2026-08-01T00:00:00Z")));
-            players.mojangProfiles().putName("nobody", new MojangNameCache(null, "", Instant.parse("2026-08-01T00:00:00Z")));
+            players.mojangProfiles().putName("steve", new MojangMapping(uuid, "Steve", lastValid));
+            players.mojangProfiles().putName("nobody", new MojangMapping(null, "", lastValid));
         }
         try (PlayerStore players = open()) {
-            MojangNameCache steve = players.mojangProfiles().byName("steve").orElseThrow();
-            assertEquals(UUID.fromString("61699b2e-d327-4a01-9f1e-0ea8c3f06bc6"), steve.uuid());
+            MojangMapping steve = players.mojangProfiles().byName("steve").orElseThrow();
+            assertEquals(uuid, steve.uuid());
             assertEquals("Steve", steve.username());
-            MojangNameCache nobody = players.mojangProfiles().byName("nobody").orElseThrow();
+            assertEquals(lastValid, steve.lastValid());
+            assertEquals("Steve", players.mojangProfiles().byUuid(uuid).orElseThrow().username());
+            MojangMapping nobody = players.mojangProfiles().byName("nobody").orElseThrow();
             assertNull(nobody.uuid());
-            assertNull(nobody.username());
+            assertFalse(nobody.resolved());
         }
     }
 
