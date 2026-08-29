@@ -37,7 +37,7 @@ class StoreCompactTest {
                         db.addSessionMinute(id, "live:one");
                         db.addMinute(id, day, "hypixel.net");
                     }
-                    db.commit();
+                    db.flushPending();
                 });
             }
             long bloated = StoreMv.size(file);
@@ -53,6 +53,40 @@ class StoreCompactTest {
         }
         try (StoreDb db = StoreDb.open(file)) {
             assertEquals(40, db.call(() -> db.snapshot(uuid).orElseThrow().totalMinutes()));
+        }
+    }
+
+    @Test
+    void repeatedMinuteTicksDoNotLeaveDeadChunks() {
+        Path file = temp.resolve("store.db");
+        UUID uuid = UUID.fromString("61699b2e-d327-4a01-9f1e-0ea8c3f06bc6");
+        LocalDate day = LocalDate.of(2026, 8, 1);
+        List<UUID> ids = new ArrayList<>();
+        ids.add(uuid);
+        for (int i = 1; i < 80; i++) {
+            ids.add(UUID.randomUUID());
+        }
+        try (StoreDb db = StoreDb.open(file)) {
+            for (int minute = 0; minute < 40; minute++) {
+                db.run(() -> {
+                    for (UUID id : ids) {
+                        db.ensurePlayer(id, "Steve");
+                        db.touchUsername(id, "Steve", Instant.parse("2026-08-01T00:00:00Z"));
+                        db.addSessionMinute(id, "live:one");
+                        db.addMinute(id, day, "hypixel.net");
+                    }
+                });
+            }
+            long size = StoreMv.size(file);
+            assertFalse(db.call(db::hasReclaimableSpace), "file=" + size);
+            PlayerSnapshot snapshot = db.call(() -> db.snapshot(uuid).orElseThrow());
+            assertEquals(40, snapshot.totalMinutes());
+            assertEquals(40L, db.call(() -> db.sessionMinutes(uuid, "live:one")));
+            db.run(db::flushPending);
+        }
+        try (StoreDb db = StoreDb.open(file)) {
+            assertEquals(40, db.call(() -> db.snapshot(uuid).orElseThrow().totalMinutes()));
+            assertEquals(40L, db.call(() -> db.sessionMinutes(uuid, "live:one")));
         }
     }
 

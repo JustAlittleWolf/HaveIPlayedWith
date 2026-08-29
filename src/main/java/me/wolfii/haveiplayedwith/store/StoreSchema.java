@@ -13,7 +13,8 @@ import org.dizitart.no2.index.IndexType;
  * <p>Play minutes are only stored with a server id, so a player who has
  * played always has a most-played server. Each player keeps only the
  * {@link #KEEP_RECENT} most recent play days and sessions; lifetime totals
- * stay on the player row.
+ * stay on the player row. Per-minute increments are coalesced in memory by
+ * {@link StoreDb} so those rows are not rewritten every tick.
  */
 final class StoreSchema {
     static final int KEEP_RECENT = 5;

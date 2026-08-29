@@ -11,21 +11,34 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Serializes every store read, write, and compact onto one thread. MVStore
- * auto-commit flushes to disk in the background; {@link Nitrite#close()} writes
- * anything still pending.
+ * Serializes every store read, write, compact, and pending-minute flush onto one
+ * thread. MVStore auto-commit flushes to disk in the background; {@link Nitrite#close()}
+ * writes anything still pending.
  */
 final class StoreWorker implements AutoCloseable {
     /** How often to look at in-memory fill stats. The check itself does not read documents. */
     private static final long COMPACT_PERIOD_SECONDS = 900;
+    /** How often to write coalesced minute ticks so a crash does not drop a long session. */
+    private static final long FLUSH_PERIOD_SECONDS = 300;
 
     private final ScheduledExecutorService worker = ModThreads.singleScheduledWorker("db");
     private Nitrite nitrite;
     private ScheduledFuture<?> compactTask;
+    private ScheduledFuture<?> flushTask;
     private volatile long lastWorkMs = System.currentTimeMillis();
 
     void use(Nitrite nitrite) {
         this.nitrite = nitrite;
+    }
+
+    void scheduleFlush(Runnable flush) {
+        flushTask = worker.scheduleWithFixedDelay(() -> {
+            try {
+                flush.run();
+            } catch (RuntimeException e) {
+                ModLog.LOGGER.warn("HaveIPlayedWith store flush failed", e);
+            }
+        }, FLUSH_PERIOD_SECONDS, FLUSH_PERIOD_SECONDS, TimeUnit.SECONDS);
     }
 
     void scheduleCompact(Runnable compact) {
@@ -66,6 +79,9 @@ final class StoreWorker implements AutoCloseable {
     }
 
     void close(StoreWork shutdown) {
+        if (flushTask != null) {
+            flushTask.cancel(false);
+        }
         if (compactTask != null) {
             compactTask.cancel(false);
         }

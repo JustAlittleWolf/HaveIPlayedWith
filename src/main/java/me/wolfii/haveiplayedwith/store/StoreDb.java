@@ -12,9 +12,11 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -50,8 +52,9 @@ import static org.dizitart.no2.filters.FluentFilter.where;
 
 /**
  * Nitrite queries over the collections {@link StoreSchema} defines. All access
- * goes through {@link StoreWorker}. Writes stay in MVStore's memory until its
- * auto-commit thread flushes ({@link StoreMv#AUTO_COMMIT_DELAY_MS}).
+ * goes through {@link StoreWorker}. Minute ticks stay in {@link #pendingPlay}
+ * until a flush, because rewriting four documents per online player every
+ * minute leaves MVStore chunks that only a rewrite-compact reclaims.
  */
 final class StoreDb implements AutoCloseable {
     private final Path file;
@@ -63,6 +66,8 @@ final class StoreDb implements AutoCloseable {
     private NitriteCollection sessions;
     private NitriteCollection playServers;
     private NitriteCollection profiles;
+    /** Unwritten minute credits, one bucket per player, only touched on the db thread. */
+    private final Map<UUID, PendingPlay> pendingPlay = new HashMap<>();
 
     private StoreDb(Path file, StoreWorker worker, Nitrite nitrite) {
         this.file = file;
@@ -77,6 +82,7 @@ final class StoreDb implements AutoCloseable {
                 Files.createDirectories(parent);
             }
             StoreDb db = new StoreDb(file, new StoreWorker(), openNitrite(file));
+            db.worker.scheduleFlush(db::flushPending);
             db.worker.scheduleCompact(db::compactIfWorthwhile);
             return db;
         } catch (Exception e) {
@@ -119,6 +125,7 @@ final class StoreDb implements AutoCloseable {
         if (!StoreMv.shouldCompact(file, nitrite)) {
             return;
         }
+        flushPending();
         long before = StoreMv.size(file);
         try {
             nitrite.commit();
@@ -165,6 +172,7 @@ final class StoreDb implements AutoCloseable {
     @Override
     public void close() {
         worker.close(() -> {
+            flushPending();
             if (nitrite != null && !nitrite.isClosed()) {
                 nitrite.close();
             }
@@ -264,7 +272,7 @@ final class StoreDb implements AutoCloseable {
             text(row, CURRENT_USERNAME),
             note,
             takenAt,
-            asLong(row.get(TOTAL_MINUTES)),
+            asLong(row.get(TOTAL_MINUTES)) + pendingMinutes(uuid),
             (int) asLong(row.get(SESSION_COUNT)),
             (int) asLong(row.get(DAYS_PLAYED)),
             lastPlayedBefore(row, LocalDate.now()),
@@ -275,16 +283,25 @@ final class StoreDb implements AutoCloseable {
 
     Long sessionMinutes(UUID uuid, String sessionId) {
         Document row = byKey(sessions, key(id(uuid), sessionId));
-        return row == null ? null : asLong(row.get(MINUTES));
+        long stored = row == null ? 0L : asLong(row.get(MINUTES));
+        PendingPlay pending = pendingPlay.get(uuid);
+        if (pending != null && sessionId.equals(pending.sessionId)) {
+            stored += pending.minutes;
+        }
+        return row == null && stored == 0L ? null : stored;
     }
 
     void addSessionMinute(UUID uuid, String sessionId) {
-        String key = key(id(uuid), sessionId);
-        if (update(sessions, key, doc -> doc.put(MINUTES, asLong(doc.get(MINUTES)) + 1))) {
-            return;
+        PendingPlay pending = pendingPlay.get(uuid);
+        if (pending != null && pending.minutes > 0 && pending.sessionId != null && !sessionId.equals(pending.sessionId)) {
+            flushPending(uuid);
         }
-        insert(sessions, key, createDocument(PLAYER_UUID, id(uuid)).put(MINUTES, 1L));
-        rememberSession(uuid, sessionId);
+        String key = key(id(uuid), sessionId);
+        if (byKey(sessions, key) == null) {
+            insert(sessions, key, createDocument(PLAYER_UUID, id(uuid)).put(MINUTES, 0L));
+            rememberSession(uuid, sessionId);
+        }
+        pendingPlay.computeIfAbsent(uuid, id -> new PendingPlay()).sessionId = sessionId;
     }
 
     void addMinute(UUID uuid, LocalDate day, String serverId) {
@@ -293,15 +310,14 @@ final class StoreDb implements AutoCloseable {
         }
         String iso = day.toString();
         String key = key(id(uuid), iso);
-        if (!update(playDays, key, doc -> doc.put(MINUTES, asLong(doc.get(MINUTES)) + 1))) {
+        if (byKey(playDays, key) == null) {
             insert(playDays, key, createDocument(PLAYER_UUID, id(uuid))
                 .put(PLAY_DAY, iso)
-                .put(MINUTES, 1L));
+                .put(MINUTES, 0L));
             rememberDay(uuid, iso);
-        } else {
-            update(players, id(uuid), doc -> doc.put(TOTAL_MINUTES, asLong(doc.get(TOTAL_MINUTES)) + 1));
         }
-        addServerMinute(uuid, serverId);
+        ensureServer(uuid, serverId);
+        creditPending(uuid, iso, serverId);
     }
 
     Optional<ProfileMapping> profileByUuid(UUID uuid) {
@@ -400,9 +416,15 @@ final class StoreDb implements AutoCloseable {
     }
 
     private Optional<ServerPlay> mostPlayedServer(UUID uuid) {
+        PendingPlay pending = pendingPlay.get(uuid);
         ServerPlay best = null;
         for (Document row : playServers.find(where(PLAYER_UUID).eq(id(uuid)))) {
-            ServerPlay server = new ServerPlay(text(row, SERVER_ID), asLong(row.get(MINUTES)));
+            String serverId = text(row, SERVER_ID);
+            long minutes = asLong(row.get(MINUTES));
+            if (pending != null && pending.minutes > 0 && serverId.equals(pending.serverId)) {
+                minutes += pending.minutes;
+            }
+            ServerPlay server = new ServerPlay(serverId, minutes);
             if (best == null
                 || server.minutes() > best.minutes()
                 || (server.minutes() == best.minutes() && server.serverId().compareTo(best.serverId()) < 0)) {
@@ -412,14 +434,65 @@ final class StoreDb implements AutoCloseable {
         return Optional.ofNullable(best);
     }
 
-    private void addServerMinute(UUID uuid, String serverId) {
+    private void ensureServer(UUID uuid, String serverId) {
         String key = key(id(uuid), serverId);
-        if (update(playServers, key, doc -> doc.put(MINUTES, asLong(doc.get(MINUTES)) + 1))) {
+        if (byKey(playServers, key) != null) {
             return;
         }
         insert(playServers, key, createDocument(PLAYER_UUID, id(uuid))
             .put(SERVER_ID, serverId)
-            .put(MINUTES, 1L));
+            .put(MINUTES, 0L));
+    }
+
+    private void creditPending(UUID uuid, String dayIso, String serverId) {
+        PendingPlay pending = pendingPlay.get(uuid);
+        if (pending != null && pending.minutes > 0
+            && ((pending.dayIso != null && !dayIso.equals(pending.dayIso))
+                || (pending.serverId != null && !serverId.equals(pending.serverId)))) {
+            String sessionId = pending.sessionId;
+            flushPending(uuid);
+            pending = pendingPlay.computeIfAbsent(uuid, id -> new PendingPlay());
+            pending.sessionId = sessionId;
+        }
+        if (pending == null) {
+            pending = pendingPlay.computeIfAbsent(uuid, id -> new PendingPlay());
+        }
+        pending.dayIso = dayIso;
+        pending.serverId = serverId;
+        pending.minutes++;
+    }
+
+    private long pendingMinutes(UUID uuid) {
+        PendingPlay pending = pendingPlay.get(uuid);
+        return pending == null ? 0L : pending.minutes;
+    }
+
+    void flushPending() {
+        boolean wrote = false;
+        for (UUID uuid : List.copyOf(pendingPlay.keySet())) {
+            wrote |= flushPending(uuid);
+        }
+        if (wrote) {
+            nitrite.commit();
+        }
+    }
+
+    private boolean flushPending(UUID uuid) {
+        PendingPlay pending = pendingPlay.remove(uuid);
+        if (pending == null || pending.minutes <= 0) {
+            return false;
+        }
+        long extra = pending.minutes;
+        if (pending.sessionId != null && !pending.sessionId.isBlank()) {
+            update(sessions, key(id(uuid), pending.sessionId),
+                doc -> doc.put(MINUTES, asLong(doc.get(MINUTES)) + extra));
+        }
+        if (pending.serverId != null) {
+            update(playServers, key(id(uuid), pending.serverId),
+                doc -> doc.put(MINUTES, asLong(doc.get(MINUTES)) + extra));
+        }
+        update(players, id(uuid), doc -> doc.put(TOTAL_MINUTES, asLong(doc.get(TOTAL_MINUTES)) + extra));
+        return true;
     }
 
     private void rememberSession(UUID uuid, String sessionId) {
@@ -439,7 +512,6 @@ final class StoreDb implements AutoCloseable {
     private void rememberDay(UUID uuid, String newest) {
         update(players, id(uuid), doc -> {
             doc.put(DAYS_PLAYED, (int) asLong(doc.get(DAYS_PLAYED)) + 1);
-            doc.put(TOTAL_MINUTES, asLong(doc.get(TOTAL_MINUTES)) + 1);
             List<String> days = stringList(doc, RECENT_DAYS);
             if (!days.contains(newest)) {
                 days.add(newest);
@@ -522,5 +594,12 @@ final class StoreDb implements AutoCloseable {
 
     private static long asLong(Object value) {
         return value instanceof Number number ? number.longValue() : 0L;
+    }
+
+    private static final class PendingPlay {
+        private String sessionId;
+        private String dayIso;
+        private String serverId;
+        private long minutes;
     }
 }
