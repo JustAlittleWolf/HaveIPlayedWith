@@ -31,6 +31,7 @@ import static me.wolfii.haveiplayedwith.store.StoreSchema.MINUTES;
 import static me.wolfii.haveiplayedwith.store.StoreSchema.NOTE;
 import static me.wolfii.haveiplayedwith.store.StoreSchema.NOTE_TAKEN_AT;
 import static me.wolfii.haveiplayedwith.store.StoreSchema.PLAYERS;
+import static me.wolfii.haveiplayedwith.store.StoreSchema.PLAYER_UUID;
 import static me.wolfii.haveiplayedwith.store.StoreSchema.PLAY_DAY;
 import static me.wolfii.haveiplayedwith.store.StoreSchema.PLAY_DAYS;
 import static me.wolfii.haveiplayedwith.store.StoreSchema.PLAY_SERVERS;
@@ -44,8 +45,6 @@ import static me.wolfii.haveiplayedwith.store.StoreSchema.TOTAL_MINUTES;
 import static me.wolfii.haveiplayedwith.store.StoreSchema.USERNAME;
 import static me.wolfii.haveiplayedwith.store.StoreSchema.USERNAME_HISTORY;
 import static me.wolfii.haveiplayedwith.store.StoreSchema.USERNAME_LOWER;
-import static me.wolfii.haveiplayedwith.store.StoreSchema.UUID_HI;
-import static me.wolfii.haveiplayedwith.store.StoreSchema.UUID_LO;
 import static org.dizitart.no2.collection.Document.createDocument;
 import static org.dizitart.no2.filters.FluentFilter.where;
 
@@ -175,14 +174,14 @@ final class StoreDb implements AutoCloseable {
     }
 
     boolean hasPlayer(UUID uuid) {
-        return byKey(players, StoreIds.key(uuid)) != null;
+        return byKey(players, id(uuid)) != null;
     }
 
     void ensurePlayer(UUID uuid, String username) {
         if (hasPlayer(uuid)) {
             return;
         }
-        insert(players, StoreIds.key(uuid), StoreIds.putUuid(createDocument(CURRENT_USERNAME, username), uuid)
+        insert(players, id(uuid), createDocument(CURRENT_USERNAME, username)
             .put(USERNAME_LOWER, lower(username))
             .put(NOTE, "")
             .put(NOTE_TAKEN_AT, 0L)
@@ -192,14 +191,14 @@ final class StoreDb implements AutoCloseable {
     }
 
     void setNote(UUID uuid, String note, long noteTakenAt) {
-        update(players, StoreIds.key(uuid), doc -> {
+        update(players, id(uuid), doc -> {
             doc.put(NOTE, note);
             doc.put(NOTE_TAKEN_AT, noteTakenAt);
         });
     }
 
     void setCurrentUsername(UUID uuid, String username) {
-        Document existing = byKey(players, StoreIds.key(uuid));
+        Document existing = byKey(players, id(uuid));
         if (existing == null || username.equals(text(existing, CURRENT_USERNAME))) {
             return;
         }
@@ -210,7 +209,7 @@ final class StoreDb implements AutoCloseable {
 
     void touchUsername(UUID uuid, String username, Instant seenAt) {
         long millis = seenAt.toEpochMilli();
-        String key = StoreIds.key(uuid, lower(username));
+        String key = key(id(uuid), lower(username));
         Document existing = byKey(history, key);
         if (existing != null && asLong(existing.get(LAST_SEEN)) >= millis) {
             return;
@@ -221,7 +220,8 @@ final class StoreDb implements AutoCloseable {
                 return;
             }
         }
-        upsert(history, key, StoreIds.putUuid(createDocument(USERNAME_LOWER, lower(username)), uuid)
+        upsert(history, key, createDocument(PLAYER_UUID, id(uuid))
+            .put(USERNAME_LOWER, lower(username))
             .put(USERNAME, username)
             .put(LAST_SEEN, millis));
     }
@@ -238,10 +238,10 @@ final class StoreDb implements AutoCloseable {
         Set<UUID> ids = new LinkedHashSet<>();
         String lower = lower(name);
         for (Document row : history.find(where(USERNAME_LOWER).eq(lower))) {
-            ids.add(StoreIds.uuid(row));
+            ids.add(parseId(text(row, PLAYER_UUID)));
         }
         for (Document row : players.find(where(USERNAME_LOWER).eq(lower))) {
-            ids.add(StoreIds.uuid(row));
+            ids.add(parseId(text(row, KEY)));
         }
         List<PlayerSnapshot> snapshots = new ArrayList<>();
         for (UUID uuid : ids) {
@@ -251,7 +251,7 @@ final class StoreDb implements AutoCloseable {
     }
 
     Optional<PlayerSnapshot> snapshot(UUID uuid) {
-        Document row = byKey(players, StoreIds.key(uuid));
+        Document row = byKey(players, id(uuid));
         if (row == null) {
             return Optional.empty();
         }
@@ -276,16 +276,16 @@ final class StoreDb implements AutoCloseable {
     }
 
     Long sessionMinutes(UUID uuid, String sessionId) {
-        Document row = byKey(sessions, StoreIds.key(uuid, sessionId));
+        Document row = byKey(sessions, key(id(uuid), sessionId));
         return row == null ? null : asLong(row.get(MINUTES));
     }
 
     void addSessionMinute(UUID uuid, String sessionId) {
-        String key = StoreIds.key(uuid, sessionId);
+        String key = key(id(uuid), sessionId);
         if (update(sessions, key, doc -> doc.put(MINUTES, asLong(doc.get(MINUTES)) + 1))) {
             return;
         }
-        insert(sessions, key, StoreIds.putUuid(createDocument(MINUTES, 1L), uuid));
+        insert(sessions, key, createDocument(PLAYER_UUID, id(uuid)).put(MINUTES, 1L));
         rememberSession(uuid, sessionId);
     }
 
@@ -294,19 +294,20 @@ final class StoreDb implements AutoCloseable {
             throw new IllegalArgumentException("serverId");
         }
         String iso = day.toString();
-        String key = StoreIds.key(uuid, iso);
+        String key = key(id(uuid), iso);
         if (!update(playDays, key, doc -> doc.put(MINUTES, asLong(doc.get(MINUTES)) + 1))) {
-            insert(playDays, key, StoreIds.putUuid(createDocument(PLAY_DAY, iso), uuid)
+            insert(playDays, key, createDocument(PLAYER_UUID, id(uuid))
+                .put(PLAY_DAY, iso)
                 .put(MINUTES, 1L));
             rememberDay(uuid, iso);
         } else {
-            update(players, StoreIds.key(uuid), doc -> doc.put(TOTAL_MINUTES, asLong(doc.get(TOTAL_MINUTES)) + 1));
+            update(players, id(uuid), doc -> doc.put(TOTAL_MINUTES, asLong(doc.get(TOTAL_MINUTES)) + 1));
         }
         addServerMinute(uuid, serverId);
     }
 
     Optional<ProfileMapping> profileByUuid(UUID uuid) {
-        return mapping(byKey(profiles, StoreIds.key(uuid)));
+        return mapping(byKey(profiles, id(uuid)));
     }
 
     Optional<ProfileMapping> profileByName(String usernameLower) {
@@ -331,7 +332,8 @@ final class StoreDb implements AutoCloseable {
             if (!lower.isBlank()) {
                 removeKey(profiles, nameMissKey(lower));
             }
-            upsert(profiles, StoreIds.key(mapping.uuid()), StoreIds.putUuid(createDocument(USERNAME, stored), mapping.uuid())
+            upsert(profiles, id(mapping.uuid()), createDocument(PLAYER_UUID, id(mapping.uuid()))
+                .put(USERNAME, stored)
                 .put(USERNAME_LOWER, lower)
                 .put(LAST_VALID, lastValid.toEpochMilli()));
             return;
@@ -340,7 +342,8 @@ final class StoreDb implements AutoCloseable {
         if (lower.isBlank()) {
             return;
         }
-        upsert(profiles, nameMissKey(lower), createDocument(USERNAME, "")
+        upsert(profiles, nameMissKey(lower), createDocument(PLAYER_UUID, "")
+            .put(USERNAME, "")
             .put(USERNAME_LOWER, lower)
             .put(LAST_VALID, lastValid.toEpochMilli()));
     }
@@ -349,14 +352,15 @@ final class StoreDb implements AutoCloseable {
         if (row == null) {
             return Optional.empty();
         }
+        String rawUuid = text(row, PLAYER_UUID);
         String rawName = text(row, USERNAME);
         Instant lastValid = Instant.ofEpochMilli(asLong(row.get(LAST_VALID)));
-        if (row.get(UUID_HI) == null) {
+        if (rawUuid.isBlank()) {
             String lookedUp = text(row, USERNAME_LOWER);
             return Optional.of(new ProfileMapping(null, lookedUp.isBlank() ? null : lookedUp, lastValid));
         }
         return Optional.of(new ProfileMapping(
-            StoreIds.uuid(row),
+            parseId(rawUuid),
             rawName.isBlank() ? null : rawName,
             lastValid
         ));
@@ -375,7 +379,7 @@ final class StoreDb implements AutoCloseable {
 
     private List<SeenName> listHistory(UUID uuid) {
         List<SeenName> names = new ArrayList<>();
-        for (Document row : history.find(where(UUID_HI).eq(StoreIds.hi(uuid)).and(where(UUID_LO).eq(StoreIds.lo(uuid))))) {
+        for (Document row : history.find(where(PLAYER_UUID).eq(id(uuid)))) {
             names.add(new SeenName(text(row, USERNAME), Instant.ofEpochMilli(asLong(row.get(LAST_SEEN)))));
         }
         names.sort(Comparator.comparing(SeenName::lastSeen).reversed());
@@ -399,7 +403,7 @@ final class StoreDb implements AutoCloseable {
 
     private Optional<ServerPlay> mostPlayedServer(UUID uuid) {
         ServerPlay best = null;
-        for (Document row : playServers.find(where(UUID_HI).eq(StoreIds.hi(uuid)).and(where(UUID_LO).eq(StoreIds.lo(uuid))))) {
+        for (Document row : playServers.find(where(PLAYER_UUID).eq(id(uuid)))) {
             ServerPlay server = new ServerPlay(text(row, SERVER_ID), asLong(row.get(MINUTES)));
             if (best == null
                 || server.minutes() > best.minutes()
@@ -411,22 +415,23 @@ final class StoreDb implements AutoCloseable {
     }
 
     private void addServerMinute(UUID uuid, String serverId) {
-        String key = StoreIds.key(uuid, serverId);
+        String key = key(id(uuid), serverId);
         if (update(playServers, key, doc -> doc.put(MINUTES, asLong(doc.get(MINUTES)) + 1))) {
             return;
         }
-        insert(playServers, key, StoreIds.putUuid(createDocument(SERVER_ID, serverId), uuid)
+        insert(playServers, key, createDocument(PLAYER_UUID, id(uuid))
+            .put(SERVER_ID, serverId)
             .put(MINUTES, 1L));
     }
 
     private void rememberSession(UUID uuid, String sessionId) {
-        update(players, StoreIds.key(uuid), doc -> {
+        update(players, id(uuid), doc -> {
             doc.put(SESSION_COUNT, (int) asLong(doc.get(SESSION_COUNT)) + 1);
             List<String> values = stringList(doc, RECENT_SESSIONS);
             if (!values.contains(sessionId)) {
                 values.add(sessionId);
                 while (values.size() > KEEP_RECENT) {
-                    removeKey(sessions, StoreIds.key(uuid, values.removeFirst()));
+                    removeKey(sessions, key(id(uuid), values.removeFirst()));
                 }
                 doc.put(RECENT_SESSIONS, values);
             }
@@ -434,7 +439,7 @@ final class StoreDb implements AutoCloseable {
     }
 
     private void rememberDay(UUID uuid, String newest) {
-        update(players, StoreIds.key(uuid), doc -> {
+        update(players, id(uuid), doc -> {
             doc.put(DAYS_PLAYED, (int) asLong(doc.get(DAYS_PLAYED)) + 1);
             doc.put(TOTAL_MINUTES, asLong(doc.get(TOTAL_MINUTES)) + 1);
             List<String> days = stringList(doc, RECENT_DAYS);
@@ -443,7 +448,7 @@ final class StoreDb implements AutoCloseable {
             }
             days.sort(null);
             while (days.size() > KEEP_RECENT) {
-                removeKey(playDays, StoreIds.key(uuid, days.removeFirst()));
+                removeKey(playDays, key(id(uuid), days.removeFirst()));
             }
             doc.put(RECENT_DAYS, days);
         });
@@ -490,6 +495,22 @@ final class StoreDb implements AutoCloseable {
             return;
         }
         insert(collection, key, fields);
+    }
+
+    private static String id(UUID uuid) {
+        return uuid.toString().replace("-", "");
+    }
+
+    private static String key(String left, String right) {
+        return left + '\t' + right;
+    }
+
+    private static UUID parseId(String compact) {
+        if (compact.indexOf('-') >= 0) {
+            return UUID.fromString(compact);
+        }
+        return UUID.fromString(compact.substring(0, 8) + "-" + compact.substring(8, 12) + "-"
+            + compact.substring(12, 16) + "-" + compact.substring(16, 20) + "-" + compact.substring(20));
     }
 
     private static String lower(String username) {
