@@ -33,7 +33,7 @@ public final class ProfileApi {
         .followRedirects(HttpClient.Redirect.NORMAL)
         .build();
     private final ProfileCache store;
-    private final RateLimiter limiter = new RateLimiter(25, 10, TimeUnit.SECONDS);
+    private final RateLimiter limiter = new RateLimiter(190, 60, TimeUnit.SECONDS);
     private final ConcurrentHashMap<UUID, ProfileMapping> uuidMemory = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, ProfileMapping> nameMemory = new ConcurrentHashMap<>();
 
