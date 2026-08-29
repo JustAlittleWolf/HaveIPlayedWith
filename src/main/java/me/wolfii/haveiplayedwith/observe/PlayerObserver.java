@@ -162,7 +162,10 @@ public final class PlayerObserver {
         return --pass.budget > 0;
     }
 
-    /** Decides off the client thread whether a sighting can be credited from cache or needs the API. */
+    /**
+     * Decides off the client thread whether a sighting can be credited from cache or needs the API.
+     * A cached UUID↔name match is credited with no request, even when that cache row is old.
+     */
     private void dispatchLoop() {
         while (!Thread.currentThread().isInterrupted()) {
             try {

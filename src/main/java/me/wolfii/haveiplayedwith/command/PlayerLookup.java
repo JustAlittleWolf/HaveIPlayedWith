@@ -50,7 +50,10 @@ final class PlayerLookup {
         });
     }
 
-    /** Asks whether the stored name is still current, so a lookup never shows a stale one. */
+    /**
+     * Always asks Mojang for the current username of this UUID, so {@code /haveiplayedwith}
+     * never shows a stale name even when live observation would trust the cache.
+     */
     private PlayerSnapshot refreshed(PlayerSnapshot match) {
         profiles.lookupUuid(match.uuid()).ifPresent(profile -> {
             if (!profile.username().equals(match.currentUsername())) {

@@ -22,6 +22,21 @@ class ProfileApiTest {
     }
 
     @Test
+    void matchingNameSkipsFetchEvenWhenStale() {
+        try (PlayerStore players = open()) {
+            ProfileApi profiles = new ProfileApi(players.profiles());
+            UUID uuid = UUID.fromString("61699b2e-d327-4a01-9f1e-0ea8c3f06bc6");
+            Instant ancient = Instant.now().minus(ProfileApi.STALE_AFTER).minusSeconds(1);
+            players.profiles().put(new ProfileMapping(uuid, "Steve", ancient));
+            assertFalse(profiles.needsFetch(uuid, "Steve"));
+            assertFalse(profiles.needsFetch(uuid, "steve"));
+            assertTrue(profiles.matchesCachedName(uuid, "Steve"));
+            assertTrue(profiles.needsFetch(uuid, "Alex"));
+            assertFalse(profiles.matchesCachedName(uuid, "Alex"));
+        }
+    }
+
+    @Test
     void needsFetchOnFreshNameMismatch() {
         try (PlayerStore players = open()) {
             ProfileApi profiles = new ProfileApi(players.profiles());

@@ -21,10 +21,14 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Looks up Minecraft profiles on {@code api.mojang.com}. Lookups are cached;
- * network calls are limited to 25 / 10s.
+ * Looks up Minecraft profiles on {@code api.mojang.com}. A cached UUID↔name
+ * match is trusted for live observation no matter how old it is. Cached misses
+ * and name lookups are retried after {@link #STALE_AFTER}.
+ * {@code /haveiplayedwith} always calls {@link #lookupUuid} so the shown name
+ * is current. Network calls are limited to 25 / 10s.
  */
 public final class ProfileApi {
+    /** How long a cached miss (or name lookup) can be reused before retrying Mojang. */
     public static final Duration STALE_AFTER = Duration.ofHours(24);
     private static final String UUID_LOOKUP = "https://api.mojang.com/minecraft/profile/lookup/";
     private static final String NAME_LOOKUP = "https://api.mojang.com/users/profiles/minecraft/";
@@ -89,6 +93,11 @@ public final class ProfileApi {
         return Instant.now().minus(STALE_AFTER).isAfter(mapping.lastValid());
     }
 
+    /**
+     * True when live observation should hit Mojang for this UUID and tab-list name.
+     * A cached UUID↔name match is trusted regardless of age. A name mismatch always
+     * fetches. A cached miss is retried only after {@link #STALE_AFTER}.
+     */
     public boolean needsFetch(UUID uuid, String observedName) {
         Optional<ProfileMapping> cache = cached(uuid);
         if (cache.isEmpty()) {
@@ -104,9 +113,9 @@ public final class ProfileApi {
     }
 
     /**
-     * True when this UUID is already confirmed to belong to {@code observedName}.
-     * Cached misses (empty username after 204/404) are not a match, so nearby NPCs
-     * with fake UUIDs are not credited as players.
+     * True when this UUID is already confirmed to belong to {@code observedName},
+     * even if that confirmation is old. Cached misses (empty username after 204/404)
+     * are not a match, so nearby NPCs with fake UUIDs are not credited as players.
      */
     public boolean matchesCachedName(UUID uuid, String observedName) {
         Optional<ProfileMapping> cache = cached(uuid);
@@ -115,6 +124,13 @@ public final class ProfileApi {
             && cache.get().username().equalsIgnoreCase(observedName);
     }
 
+    /**
+     * Asks Mojang for the current username of this UUID. A matching cache entry is
+     * not enough: {@code /haveiplayedwith} uses this so a lookup never shows a
+     * stale name. The only skip is a cached miss that is not yet stale (NPC /
+     * fake UUIDs). Live observation does not call this when {@link #matchesCachedName}
+     * is already true.
+     */
     public Optional<Profile> lookupUuid(UUID uuid) {
         Optional<ProfileMapping> cache = cached(uuid);
         if (cache.isPresent() && !isStale(cache.get()) && !cache.get().resolved()) {
