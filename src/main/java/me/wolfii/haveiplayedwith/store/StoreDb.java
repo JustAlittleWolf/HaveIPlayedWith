@@ -76,7 +76,6 @@ final class StoreDb implements AutoCloseable {
             if (parent != null) {
                 Files.createDirectories(parent);
             }
-            StoreMv.compactIfWorthwhile(file);
             StoreDb db = new StoreDb(file, new StoreWorker(), openNitrite(file));
             db.worker.scheduleCompact(db::compactIfWorthwhile);
             return db;
@@ -169,7 +168,6 @@ final class StoreDb implements AutoCloseable {
             if (nitrite != null && !nitrite.isClosed()) {
                 nitrite.close();
             }
-            StoreMv.compactIfWorthwhile(file);
         });
     }
 
