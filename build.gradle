@@ -96,4 +96,12 @@ jar {
         exclude 'org/dizitart/no2/mvstore/compat/**'
         exclude 'org/h2/mvstore/rtree/**'
     }
+
+    doLast {
+        File jar = archiveFile.get().asFile
+        long maxBytes = 1024L * 1024L
+        if (jar.length() >= maxBytes) {
+            throw new GradleException("Mod jar is ${jar.length()} bytes; must stay under 1 MB: ${jar}")
+        }
+    }
 }

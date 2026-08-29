@@ -6,19 +6,34 @@ import org.dizitart.no2.Nitrite;
 
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ExecutorService;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Serializes every store read and write onto one thread. MVStore auto-commit
- * flushes to disk in the background; {@link Nitrite#close()} writes anything still pending.
+ * Serializes every store read, write, and compact onto one thread. MVStore
+ * auto-commit flushes to disk in the background; {@link Nitrite#close()} writes
+ * anything still pending.
  */
 final class StoreWorker implements AutoCloseable {
-    private final ExecutorService worker = ModThreads.singleWorker("db");
-    private final Nitrite nitrite;
+    private static final long COMPACT_PERIOD_SECONDS = 30;
 
-    StoreWorker(Nitrite nitrite) {
+    private final ScheduledExecutorService worker = ModThreads.singleScheduledWorker("db");
+    private Nitrite nitrite;
+    private ScheduledFuture<?> compactTask;
+
+    void use(Nitrite nitrite) {
         this.nitrite = nitrite;
+    }
+
+    void scheduleCompact(Runnable compact) {
+        compactTask = worker.scheduleWithFixedDelay(() -> {
+            try {
+                compact.run();
+            } catch (RuntimeException e) {
+                ModLog.LOGGER.warn("HaveIPlayedWith store compact failed", e);
+            }
+        }, COMPACT_PERIOD_SECONDS, COMPACT_PERIOD_SECONDS, TimeUnit.SECONDS);
     }
 
     private static RuntimeException unwrap(ExecutionException e) {
@@ -47,11 +62,13 @@ final class StoreWorker implements AutoCloseable {
         });
     }
 
-    @Override
-    public void close() {
+    void close(StoreWork shutdown) {
+        if (compactTask != null) {
+            compactTask.cancel(false);
+        }
         try {
             worker.submit(() -> {
-                nitrite.close();
+                shutdown.run();
                 return null;
             }).get();
         } catch (InterruptedException e) {
@@ -62,7 +79,7 @@ final class StoreWorker implements AutoCloseable {
         }
         worker.shutdown();
         try {
-            if (!worker.awaitTermination(5, TimeUnit.SECONDS)) {
+            if (!worker.awaitTermination(15, TimeUnit.SECONDS)) {
                 worker.shutdownNow();
             }
         } catch (InterruptedException e) {
@@ -71,9 +88,20 @@ final class StoreWorker implements AutoCloseable {
         }
     }
 
+    @Override
+    public void close() {
+        close(() -> {
+            if (nitrite != null && !nitrite.isClosed()) {
+                nitrite.close();
+            }
+        });
+    }
+
     private void closeQuietly() {
         try {
-            nitrite.close();
+            if (nitrite != null && !nitrite.isClosed()) {
+                nitrite.close();
+            }
         } catch (Exception e) {
             ModLog.LOGGER.warn("Failed to close HaveIPlayedWith database", e);
         }

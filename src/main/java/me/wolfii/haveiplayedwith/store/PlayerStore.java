@@ -9,7 +9,8 @@ import java.util.UUID;
 
 /**
  * Player store backed by a single Nitrite file. Reads and writes run on the
- * database thread; MVStore auto-commit flushes to disk in the background.
+ * database thread; MVStore auto-commit flushes in the background, and leftover
+ * chunks are rewritten when that would actually shrink the file.
  */
 public final class PlayerStore implements AutoCloseable {
     private final StoreDb db;

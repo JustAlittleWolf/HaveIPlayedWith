@@ -201,6 +201,8 @@ class PlayerStoreTest {
             assertEquals("Steve", players.recordLivePlay(uuid, "Alex", LocalDate.of(2026, 8, 2), "live:two", "hypixel.net").orElseThrow());
             assertTrue(players.recordLivePlay(uuid, "Alex", LocalDate.of(2026, 8, 2), "live:two", "hypixel.net").isEmpty());
             assertTrue(players.recordLivePlay(uuid, "alex", LocalDate.of(2026, 8, 2), "live:two", "hypixel.net").isEmpty());
+            assertEquals("Alex", players.recordLivePlay(uuid, "Steve", LocalDate.of(2026, 8, 3), "live:three", "hypixel.net").orElseThrow());
+            assertEquals("Steve", players.get(uuid).orElseThrow().currentUsername());
         }
     }
 
