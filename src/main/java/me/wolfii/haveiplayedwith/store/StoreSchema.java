@@ -18,9 +18,6 @@ final class StoreSchema {
     static final String PLAY_SESSIONS = "play_sessions";
     static final String PLAY_SERVERS = "play_servers";
     static final String MOJANG = "mojang";
-    static final String NAME_INDEX = "name_index";
-    static final String MOJANG_UUID = "mojang_uuid";
-    static final String MOJANG_NAME = "mojang_name";
 
     static final String PLAYER_UUID = "player_uuid";
     static final String CURRENT_USERNAME = "current_username";
@@ -36,7 +33,6 @@ final class StoreSchema {
     static final String MINUTES = "minutes";
     static final String SESSION_ID = "session_id";
     static final String SERVER_ID = "server_id";
-    static final String FETCHED_AT = "fetched_at";
 
     private StoreSchema() {
     }
