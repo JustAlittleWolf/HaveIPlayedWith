@@ -25,17 +25,14 @@ class StoreCompactTest {
         LocalDate day = LocalDate.of(2026, 8, 1);
         List<UUID> ids = new ArrayList<>();
         ids.add(uuid);
-        for (int i = 1; i < 80; i++) {
+        for (int i = 1; i < 1200; i++) {
             ids.add(UUID.randomUUID());
         }
         try (StoreDb db = StoreDb.open(file)) {
-            for (int minute = 0; minute < 40; minute++) {
+            for (int minute = 0; minute < 60; minute++) {
                 db.run(() -> {
                     for (UUID id : ids) {
-                        db.ensurePlayer(id, "Steve");
-                        db.touchUsername(id, "Steve", Instant.parse("2026-08-01T00:00:00Z"));
-                        db.addSessionMinute(id, "live:one");
-                        db.addMinute(id, day, "hypixel.net");
+                        db.recordLivePlay(id, "Steve", day, "live:one", "hypixel.net");
                     }
                     db.flushPending();
                 });
@@ -47,12 +44,12 @@ class StoreCompactTest {
             assertTrue(compacted < bloated / 2, "bloated=" + bloated + " compacted=" + compacted);
             assertFalse(db.call(db::hasReclaimableSpace));
             PlayerSnapshot snapshot = db.call(() -> db.snapshot(uuid).orElseThrow());
-            assertEquals(40, snapshot.totalMinutes());
-            assertEquals(40L, db.call(() -> db.sessionMinutes(uuid, "live:one")));
+            assertEquals(60, snapshot.totalMinutes());
+            assertEquals(60L, db.call(() -> db.sessionMinutes(uuid, "live:one")));
             assertEquals("hypixel.net", snapshot.mostPlayedServer().orElseThrow().serverId());
         }
         try (StoreDb db = StoreDb.open(file)) {
-            assertEquals(40, db.call(() -> db.snapshot(uuid).orElseThrow().totalMinutes()));
+            assertEquals(60, db.call(() -> db.snapshot(uuid).orElseThrow().totalMinutes()));
         }
     }
 
@@ -70,10 +67,7 @@ class StoreCompactTest {
             for (int minute = 0; minute < 40; minute++) {
                 db.run(() -> {
                     for (UUID id : ids) {
-                        db.ensurePlayer(id, "Steve");
-                        db.touchUsername(id, "Steve", Instant.parse("2026-08-01T00:00:00Z"));
-                        db.addSessionMinute(id, "live:one");
-                        db.addMinute(id, day, "hypixel.net");
+                        db.recordLivePlay(id, "Steve", day, "live:one", "hypixel.net");
                     }
                 });
             }
@@ -95,15 +89,37 @@ class StoreCompactTest {
         Path file = temp.resolve("store.db");
         try (StoreDb db = StoreDb.open(file)) {
             db.run(() -> {
-                UUID uuid = UUID.randomUUID();
-                db.ensurePlayer(uuid, "Steve");
-                db.addMinute(uuid, LocalDate.of(2026, 8, 1), "hypixel.net");
-                db.commit();
+                db.recordLivePlay(UUID.randomUUID(), "Steve", LocalDate.of(2026, 8, 1), "live:one", "hypixel.net");
+                db.flushPending();
             });
             long size = StoreMv.size(file);
             assertFalse(db.call(db::hasReclaimableSpace));
             db.run(db::compactIfWorthwhile);
             assertEquals(size, StoreMv.size(file));
+        }
+    }
+
+    @Test
+    void compactedPlayLogStaysSmall() {
+        Path file = temp.resolve("store.db");
+        LocalDate day = LocalDate.of(2026, 8, 29);
+        try (StoreDb db = StoreDb.open(file)) {
+            db.run(() -> {
+                for (int i = 0; i < 790; i++) {
+                    UUID id = new UUID(i, i + 1);
+                    db.recordLivePlay(id, "Player" + (i % 1000), day, "live:one", "hypixel.net");
+                    for (int minute = 1; minute < 18; minute++) {
+                        db.recordLivePlay(id, "Player" + (i % 1000), day, "live:one", "hypixel.net");
+                    }
+                }
+                db.flushPending();
+            });
+        }
+        try (StoreDb db = StoreDb.open(file)) {
+            db.run(db::compactIfWorthwhile);
+            long size = StoreMv.size(file);
+            assertTrue(size < 200_000, "compacted=" + size);
+            assertEquals(18, db.call(() -> db.snapshot(new UUID(0, 1)).orElseThrow().totalMinutes()));
         }
     }
 }

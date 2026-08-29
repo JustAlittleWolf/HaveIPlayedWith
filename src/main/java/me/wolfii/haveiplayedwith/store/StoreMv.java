@@ -1,26 +1,18 @@
 package me.wolfii.haveiplayedwith.store;
 
 import me.wolfii.haveiplayedwith.ModLog;
-import org.dizitart.no2.Nitrite;
 import org.h2.mvstore.FileStore;
 import org.h2.mvstore.MVStore;
 import org.h2.mvstore.MVStoreTool;
 
-import java.lang.reflect.Field;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
 /**
- * H2 MVStore knobs and rewrite-compact. Nitrite opens the store with
- * {@code autoCompactFillRate(0)} because H2's background compact can race with
- * writes; this class never turns that back on. Instead it copies live pages into
- * a new file, and only when in-memory fill stats say that copy would actually
- * shrink the file.
- *
- * <p>{@link FileStore#getFillRate()} and {@link FileStore#getChunksFillRate()}
- * walk the chunk-metadata map already in RAM. They do not read player documents
- * or scan the file. A rewrite still copies live pages, so it only runs when the
- * store has been idle and the savings are large.
+ * H2 MVStore knobs and rewrite-compact. Background compact is left off
+ * ({@code autoCompactFillRate(0)}) because it can race with writes. Leftover
+ * chunks are copied into a new file only when in-memory fill stats say that
+ * rewrite would actually shrink the file.
  */
 final class StoreMv {
     /** Skip compact when the file is still a reasonable size. */
@@ -29,10 +21,7 @@ final class StoreMv {
     static final long MIN_RECLAIM_BYTES = 1024L * 1024L;
     /** Skip compact when chunks are already at least this percent live. */
     static final int MAX_LIVE_PERCENT = 50;
-    /**
-     * Nitrite turns auto-commit on at 1s after the first map is created. A longer
-     * delay means fewer copy-on-write chunks for the same minute ticks.
-     */
+    /** Longer delay means fewer copy-on-write chunks for the same dirty maps. */
     static final int AUTO_COMMIT_DELAY_MS = 10_000;
 
     private StoreMv() {
@@ -54,10 +43,23 @@ final class StoreMv {
         MVStoreTool.compactCleanUp(path(file));
     }
 
-    static void tune(Nitrite nitrite) {
-        MVStore store = unwrap(nitrite);
-        if (store != null) {
+    static MVStore open(Path file) {
+        try {
+            Path parent = file.getParent();
+            if (parent != null) {
+                Files.createDirectories(parent);
+            }
+            cleanup(file);
+            MVStore store = new MVStore.Builder()
+                .fileName(path(file))
+                .compressHigh()
+                .autoCommitBufferSize(2048)
+                .autoCompactFillRate(0)
+                .open();
             store.setAutoCommitDelay(AUTO_COMMIT_DELAY_MS);
+            return store;
+        } catch (Exception e) {
+            throw new IllegalStateException("Failed to open HaveIPlayedWith store at " + file, e);
         }
     }
 
@@ -74,12 +76,7 @@ final class StoreMv {
         return reclaimable >= MIN_RECLAIM_BYTES && live <= MAX_LIVE_PERCENT;
     }
 
-    /**
-     * Uses the open store's in-memory file size and chunk fill rates. No document
-     * reads and no extra file open.
-     */
-    static boolean shouldCompact(Nitrite nitrite) {
-        MVStore store = unwrap(nitrite);
+    static boolean shouldCompact(MVStore store) {
         if (store == null || store.isClosed()) {
             return false;
         }
@@ -88,10 +85,6 @@ final class StoreMv {
             return false;
         }
         return worthRewriting(files.size(), livePercent(files));
-    }
-
-    static boolean shouldCompact(Path file, Nitrite nitrite) {
-        return shouldCompact(nitrite);
     }
 
     static boolean shouldCompact(Path file) {
@@ -111,36 +104,10 @@ final class StoreMv {
         MVStoreTool.compact(path(file), true);
     }
 
-    static void compactIfWorthwhile(Path file) {
-        cleanup(file);
-        if (!shouldCompact(file)) {
-            return;
-        }
-        long before = size(file);
-        compact(file);
-        cleanup(file);
-        long after = size(file);
-        if (after < before) {
-            ModLog.LOGGER.info("Compacted HaveIPlayedWith store from {} to {} bytes", before, after);
-        }
-    }
-
     static int livePercent(FileStore<?> files) {
         if (files == null) {
             return 100;
         }
         return Math.min(files.getFillRate(), files.getChunksFillRate());
-    }
-
-    static MVStore unwrap(Nitrite nitrite) {
-        try {
-            Object store = nitrite.getStore();
-            Field field = store.getClass().getDeclaredField("mvStore");
-            field.setAccessible(true);
-            return (MVStore) field.get(store);
-        } catch (ReflectiveOperationException e) {
-            ModLog.LOGGER.debug("Could not reach the MVStore under Nitrite", e);
-            return null;
-        }
     }
 }

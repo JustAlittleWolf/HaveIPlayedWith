@@ -2,7 +2,7 @@ package me.wolfii.haveiplayedwith.store;
 
 import me.wolfii.haveiplayedwith.ModLog;
 import me.wolfii.haveiplayedwith.ModThreads;
-import org.dizitart.no2.Nitrite;
+import org.h2.mvstore.MVStore;
 
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
@@ -11,24 +11,21 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Serializes every store read, write, compact, and pending-minute flush onto one
- * thread. MVStore auto-commit flushes to disk in the background; {@link Nitrite#close()}
- * writes anything still pending.
+ * Serializes every store read, write, compact, and pending flush onto one thread.
  */
 final class StoreWorker implements AutoCloseable {
-    /** How often to look at in-memory fill stats. The check itself does not read documents. */
+    /** How often to look at in-memory fill stats. The check itself does not read rows. */
     private static final long COMPACT_PERIOD_SECONDS = 900;
     /** How often to write coalesced minute ticks so a crash does not drop a long session. */
     private static final long FLUSH_PERIOD_SECONDS = 300;
 
     private final ScheduledExecutorService worker = ModThreads.singleScheduledWorker("db");
-    private Nitrite nitrite;
+    private MVStore store;
     private ScheduledFuture<?> compactTask;
     private ScheduledFuture<?> flushTask;
-    private volatile long lastWorkMs = System.currentTimeMillis();
 
-    void use(Nitrite nitrite) {
-        this.nitrite = nitrite;
+    void use(MVStore store) {
+        this.store = store;
     }
 
     void scheduleFlush(Runnable flush) {
@@ -60,7 +57,6 @@ final class StoreWorker implements AutoCloseable {
     }
 
     <T> T call(Callable<T> task) {
-        lastWorkMs = System.currentTimeMillis();
         try {
             return worker.submit(task).get();
         } catch (InterruptedException e) {
@@ -110,16 +106,16 @@ final class StoreWorker implements AutoCloseable {
     @Override
     public void close() {
         close(() -> {
-            if (nitrite != null && !nitrite.isClosed()) {
-                nitrite.close();
+            if (store != null && !store.isClosed()) {
+                store.close();
             }
         });
     }
 
     private void closeQuietly() {
         try {
-            if (nitrite != null && !nitrite.isClosed()) {
-                nitrite.close();
+            if (store != null && !store.isClosed()) {
+                store.close();
             }
         } catch (Exception e) {
             ModLog.LOGGER.warn("Failed to close HaveIPlayedWith database", e);
