@@ -10,12 +10,9 @@ import me.wolfii.haveiplayedwith.store.PlayerStore;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.fabricmc.loader.api.FabricLoader;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 public class HaveIPlayedWith implements ClientModInitializer {
     public static final String MOD_ID = "haveiplayedwith";
-    public static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
 
     private PlayerStore players;
     private PlayerObserver observer;
@@ -34,7 +31,7 @@ public class HaveIPlayedWith implements ClientModInitializer {
             }
             new HaveIPlayedWithCommands(players, mojang, imports, observer).register();
             ClientLifecycleEvents.CLIENT_STOPPING.register(client -> close());
-            LOGGER.info("Have I Played With initialized ({})", ModPaths.databaseDirectory());
+            ModLog.LOGGER.info("Have I Played With initialized ({})", ModPaths.databaseDirectory());
         } catch (Exception e) {
             throw new IllegalStateException("Failed to initialize Have I Played With", e);
         }

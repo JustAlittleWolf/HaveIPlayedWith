@@ -2,16 +2,15 @@ package me.wolfii.haveiplayedwith.mojang;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
-import me.wolfii.haveiplayedwith.http.JsonHttp;
+import me.wolfii.haveiplayedwith.ModLog;
+import me.wolfii.haveiplayedwith.http.JsonAnswer;
+import me.wolfii.haveiplayedwith.http.JsonApi;
 import me.wolfii.haveiplayedwith.http.RateLimiter;
 import me.wolfii.haveiplayedwith.store.MojangNameCache;
 import me.wolfii.haveiplayedwith.store.MojangProfileStore;
 import me.wolfii.haveiplayedwith.store.MojangUuidCache;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.net.URLEncoder;
-import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
@@ -27,11 +26,10 @@ import java.util.concurrent.TimeUnit;
  */
 public final class MojangProfileApi {
     public static final Duration STALE_AFTER = Duration.ofHours(24);
-    private static final Logger LOGGER = LoggerFactory.getLogger("haveiplayedwith");
     private static final String UUID_LOOKUP = "https://api.mojang.com/minecraft/profile/lookup/";
     private static final String NAME_LOOKUP = "https://api.mojang.com/users/profiles/minecraft/";
     private final MojangProfileStore store;
-    private final RateLimiter limiter = new RateLimiter(25, 10, TimeUnit.SECONDS);
+    private final JsonApi api = new JsonApi("Mojang", new RateLimiter(25, 10, TimeUnit.SECONDS));
     private final ConcurrentHashMap<UUID, MojangUuidCache> uuidMemory = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, MojangNameCache> nameMemory = new ConcurrentHashMap<>();
 
@@ -39,8 +37,13 @@ public final class MojangProfileApi {
         this.store = store;
     }
 
+    /** False for a cached miss, where an empty username records that nobody holds the name. */
+    private static boolean resolved(String username) {
+        return username != null && !username.isBlank();
+    }
+
     private static Optional<MojangProfile> profileOf(MojangNameCache cache) {
-        if (cache.uuid() == null || cache.username() == null || cache.username().isBlank()) {
+        if (cache.uuid() == null || !resolved(cache.username())) {
             return Optional.empty();
         }
         return Optional.of(new MojangProfile(cache.uuid(), cache.username()));
@@ -81,7 +84,7 @@ public final class MojangProfileApi {
         Optional<MojangUuidCache> stored = store.byUuid(uuid);
         stored.ifPresent(cache -> {
             uuidMemory.put(uuid, cache);
-            if (cache.username() != null && !cache.username().isBlank()) {
+            if (resolved(cache.username())) {
                 nameMemory.putIfAbsent(
                     cache.username().toLowerCase(Locale.ROOT),
                     new MojangNameCache(uuid, cache.username(), cache.fetchedAt())
@@ -140,82 +143,66 @@ public final class MojangProfileApi {
         }
         Optional<MojangNameCache> stored = store.byName(key);
         if (stored.isPresent()) {
-            MojangNameCache cache = stored.get();
-            nameMemory.put(key, cache);
-            if (cache.uuid() != null && cache.username() != null && !cache.username().isBlank()) {
-                uuidMemory.putIfAbsent(cache.uuid(), new MojangUuidCache(cache.username(), cache.fetchedAt()));
-            }
-            return profileOf(cache);
+            return profileOf(rememberStored(key, stored.get()));
         }
         NameAnswer answer = fetchName(username);
         if (answer.definitive()) {
-            Instant now = Instant.now();
-            if (answer.profile().isPresent()) {
-                MojangProfile profile = answer.profile().get();
-                rememberCurrent(profile.uuid(), profile.username());
-            } else {
-                MojangNameCache cache = new MojangNameCache(null, "", now);
-                nameMemory.put(key, cache);
-                store.putName(key, cache);
-            }
+            answer.profile().ifPresentOrElse(
+                profile -> rememberCurrent(profile.uuid(), profile.username()),
+                () -> rememberMissingName(key)
+            );
         }
         return answer.profile();
     }
 
+    /** Loads a stored mapping into memory, both directions when it resolved to an account. */
+    private MojangNameCache rememberStored(String key, MojangNameCache cache) {
+        nameMemory.put(key, cache);
+        if (cache.uuid() != null && resolved(cache.username())) {
+            uuidMemory.putIfAbsent(cache.uuid(), new MojangUuidCache(cache.username(), cache.fetchedAt()));
+        }
+        return cache;
+    }
+
+    /** Remembers that no account holds this name, so it is not looked up again. */
+    private void rememberMissingName(String key) {
+        MojangNameCache cache = new MojangNameCache(null, "", Instant.now());
+        nameMemory.put(key, cache);
+        store.putName(key, cache);
+    }
+
     private Optional<MojangProfile> fetchUuid(UUID uuid) {
         try {
-            limiter.acquire();
-            HttpResponse<String> response = JsonHttp.get(UUID_LOOKUP + uuid);
-            int status = response.statusCode();
-            if (status == 204 || status == 404) {
-                storeUuid(uuid, "");
-                return Optional.empty();
-            }
-            if (status == 429) {
-                LOGGER.debug("Mojang UUID lookup rate limited for {}", uuid);
-                return Optional.empty();
-            }
-            if (status / 100 != 2) {
-                LOGGER.debug("Mojang UUID lookup {} returned {}", uuid, status);
-                return Optional.empty();
-            }
-            String name = readName(response.body());
-            storeUuid(uuid, name == null ? "" : name);
-            return name == null || name.isBlank() ? Optional.empty() : Optional.of(new MojangProfile(uuid, name));
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            return Optional.empty();
-        } catch (Exception e) {
-            LOGGER.debug("Mojang UUID lookup failed for {}", uuid, e);
+            return switch (api.get(UUID_LOOKUP + uuid)) {
+                case JsonAnswer.Body body -> {
+                    String name = readName(body.json());
+                    storeUuid(uuid, name == null ? "" : name);
+                    yield resolved(name) ? Optional.of(new MojangProfile(uuid, name)) : Optional.empty();
+                }
+                case JsonAnswer.Missing ignored -> {
+                    storeUuid(uuid, "");
+                    yield Optional.empty();
+                }
+                case JsonAnswer.Unavailable ignored -> Optional.empty();
+            };
+        } catch (RuntimeException e) {
+            ModLog.LOGGER.debug("Mojang UUID lookup failed for {}", uuid, e);
             return Optional.empty();
         }
     }
 
     private NameAnswer fetchName(String username) {
         try {
-            limiter.acquire();
             String encoded = URLEncoder.encode(username, StandardCharsets.UTF_8);
-            HttpResponse<String> response = JsonHttp.get(NAME_LOOKUP + encoded);
-            int status = response.statusCode();
-            if (status == 204 || status == 404) {
-                return new NameAnswer(Optional.empty(), true);
-            }
-            if (status / 100 != 2) {
-                LOGGER.debug("Mojang name lookup {} returned {}", username, status);
-                return NameAnswer.unknown();
-            }
-            return new NameAnswer(readProfile(response.body()), true);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            return NameAnswer.unknown();
-        } catch (Exception e) {
-            LOGGER.debug("Mojang name lookup failed for {}", username, e);
+            return switch (api.get(NAME_LOOKUP + encoded)) {
+                case JsonAnswer.Body body -> new NameAnswer(readProfile(body.json()), true);
+                case JsonAnswer.Missing ignored -> new NameAnswer(Optional.empty(), true);
+                case JsonAnswer.Unavailable ignored -> NameAnswer.unknown();
+            };
+        } catch (RuntimeException e) {
+            ModLog.LOGGER.debug("Mojang name lookup failed for {}", username, e);
             return NameAnswer.unknown();
         }
-    }
-
-    private static boolean resolved(String username) {
-        return username != null && !username.isBlank();
     }
 
     /**

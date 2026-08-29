@@ -7,6 +7,7 @@ import me.wolfii.haveiplayedwith.store.PlayerSnapshot;
 import me.wolfii.haveiplayedwith.store.PlayerStore;
 import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.function.Supplier;
@@ -47,13 +48,18 @@ final class PlayerLookup {
         });
     }
 
-    private void show(FabricClientCommandSource source, PlayerSnapshot match) {
+    /** Asks Mojang whether the stored name is still current, so a lookup never shows a stale one. */
+    private PlayerSnapshot refreshed(PlayerSnapshot match) {
         mojang.lookupUuid(match.uuid()).ifPresent(profile -> {
             if (!profile.username().equals(match.currentUsername())) {
-                players.applyMojangUsername(match.uuid(), profile.username(), java.time.Instant.now());
+                players.applyMojangUsername(match.uuid(), profile.username(), Instant.now());
             }
         });
-        PlayerSnapshot latest = players.get(match.uuid()).orElse(match);
+        return players.get(match.uuid()).orElse(match);
+    }
+
+    private void show(FabricClientCommandSource source, PlayerSnapshot match) {
+        PlayerSnapshot latest = refreshed(match);
         long currentSessionMinutes = players.sessionMinutes(latest.uuid(), liveSessionId.get());
         if (latest.hasPlayedBefore(currentSessionMinutes)) {
             CommandFeedback.tell(source, QueryMessages.playedWith(latest));

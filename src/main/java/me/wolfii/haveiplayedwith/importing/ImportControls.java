@@ -3,6 +3,7 @@ package me.wolfii.haveiplayedwith.importing;
 import me.wolfii.haveiplayedwith.chat.ImportMessages;
 import me.wolfii.haveiplayedwith.store.ImportProgress;
 import me.wolfii.haveiplayedwith.store.ImportProgressStore;
+import me.wolfii.haveiplayedwith.store.ImportStatus;
 import net.minecraft.client.Minecraft;
 import net.minecraft.network.chat.Component;
 
@@ -18,7 +19,7 @@ public final class ImportControls {
     private final AtomicBoolean stopRequested = new AtomicBoolean(false);
     private final AtomicBoolean silenced = new AtomicBoolean(false);
     private volatile ImportProgress latest = new ImportProgress(
-        ImportProgress.SOURCE_ALLTHELOGS, 0, -1, null, 0, ImportProgress.STATUS_STOPPED, false
+        ImportProgress.SOURCE_ALLTHELOGS, 0, -1, null, 0, ImportStatus.STOPPED, false
     );
     private volatile Runnable startAllTheLogs;
 
@@ -51,10 +52,6 @@ public final class ImportControls {
 
     public void unschedule() {
         scheduled.set(false);
-    }
-
-    public boolean scheduled() {
-        return scheduled.get();
     }
 
     public void clearStop() {
@@ -106,7 +103,7 @@ public final class ImportControls {
     }
 
     void saveStopped(ImportProgress progress) {
-        save(progress.withStatus(ImportProgress.STATUS_STOPPED));
+        save(progress.withStatus(ImportStatus.STOPPED));
         chat(ImportMessages.stopped(progress.processed()));
     }
 

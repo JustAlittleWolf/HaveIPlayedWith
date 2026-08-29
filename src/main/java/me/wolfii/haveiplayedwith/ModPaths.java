@@ -9,13 +9,13 @@ import java.nio.file.Path;
  * under {@code haveiplayedwith/database}.
  */
 public final class ModPaths {
-    public static final String DATABASE_DIRECTORY_NAME = "database";
+    private static final String DATABASE_DIRECTORY_NAME = "database";
 
     private ModPaths() {
     }
 
     public static Path directory() {
-        return FabricLoader.getInstance().getConfigDir().resolve("haveiplayedwith");
+        return FabricLoader.getInstance().getConfigDir().resolve(HaveIPlayedWith.MOD_ID);
     }
 
     public static Path databaseDirectory() {

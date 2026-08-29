@@ -2,6 +2,8 @@ package me.wolfii.haveiplayedwith.observe;
 
 import com.mojang.authlib.GameProfile;
 import me.wolfii.haveiplayedwith.MinecraftUsernames;
+import me.wolfii.haveiplayedwith.ModLog;
+import me.wolfii.haveiplayedwith.ModThreads;
 import me.wolfii.haveiplayedwith.chat.RenameMessages;
 import me.wolfii.haveiplayedwith.mojang.MojangProfileApi;
 import me.wolfii.haveiplayedwith.store.PlayerStore;
@@ -13,8 +15,6 @@ import net.minecraft.client.multiplayer.PlayerInfo;
 import net.minecraft.client.player.AbstractClientPlayer;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.network.chat.Component;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.time.Instant;
 import java.time.LocalDate;
@@ -22,7 +22,10 @@ import java.util.HashSet;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.*;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
 
 /**
  * Watches the tab list and nearby players every tick so joins and name changes are noticed
@@ -32,7 +35,6 @@ import java.util.concurrent.*;
  * read, API call and database write happens on one of this class' own threads.
  */
 public final class PlayerObserver {
-    private static final Logger LOGGER = LoggerFactory.getLogger("haveiplayedwith");
     /** Sightings waiting on a Mojang lookup, per the 250 entry buffer the API budget allows. */
     private static final int MAX_LOOKUP_BUFFER = 250;
     /** Sightings waiting to be classified as "needs a lookup" or "already known". */
@@ -40,8 +42,8 @@ public final class PlayerObserver {
     private static final long CREDIT_MEMORY_MINUTES = 60;
     private final PlayerStore players;
     private final MojangProfileApi mojang;
-    private final ExecutorService dispatcher = Executors.newSingleThreadExecutor(named("haveiplayedwith-sightings"));
-    private final ExecutorService lookupWorker = Executors.newSingleThreadExecutor(named("haveiplayedwith-mojang"));
+    private final ExecutorService dispatcher = ModThreads.singleWorker("sightings");
+    private final ExecutorService lookupWorker = ModThreads.singleWorker("mojang");
     private final BlockingQueue<Sighting> sightings = new ArrayBlockingQueue<>(MAX_SIGHTING_BUFFER);
     private final ConcurrentHashMap<UUID, Sighting> pendingLookups = new ConcurrentHashMap<>();
     private final BlockingQueue<UUID> lookups = new ArrayBlockingQueue<>(MAX_LOOKUP_BUFFER);
@@ -56,14 +58,6 @@ public final class PlayerObserver {
         this.mojang = mojang;
         dispatcher.execute(this::dispatchLoop);
         lookupWorker.execute(this::lookupLoop);
-    }
-
-    private static ThreadFactory named(String name) {
-        return runnable -> {
-            Thread thread = new Thread(runnable, name);
-            thread.setDaemon(true);
-            return thread;
-        };
     }
 
     public String liveSessionId() {
@@ -163,7 +157,7 @@ public final class PlayerObserver {
                 Thread.currentThread().interrupt();
                 return;
             } catch (RuntimeException e) {
-                LOGGER.debug("Player observation failed", e);
+                ModLog.LOGGER.debug("Player observation failed", e);
             }
         }
     }
@@ -185,7 +179,7 @@ public final class PlayerObserver {
                 Thread.currentThread().interrupt();
                 return;
             } catch (RuntimeException e) {
-                LOGGER.debug("Mojang verification failed", e);
+                ModLog.LOGGER.debug("Mojang verification failed", e);
             }
         }
     }

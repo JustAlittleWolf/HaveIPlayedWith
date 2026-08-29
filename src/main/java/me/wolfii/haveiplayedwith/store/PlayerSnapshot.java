@@ -18,6 +18,9 @@ public record PlayerSnapshot(
     List<SeenName> names,
     List<ServerPlay> servers
 ) {
+    /** Extra minutes required beyond the current session so live logging cannot look like prior play. */
+    public static final int CURRENT_SESSION_BUFFER_MINUTES = 5;
+
     public PlayerSnapshot {
         names = List.copyOf(names);
         servers = List.copyOf(servers);
@@ -32,9 +35,6 @@ public record PlayerSnapshot(
     public Optional<ServerPlay> mostPlayedServer() {
         return servers.isEmpty() ? Optional.empty() : Optional.of(servers.getFirst());
     }
-
-    /** Extra minutes required beyond the current session so live logging cannot look like prior play. */
-    public static final int CURRENT_SESSION_BUFFER_MINUTES = 5;
 
     public boolean hasPlayed() {
         return totalMinutes > 0 || sessionCount > 0 || daysPlayed > 0;

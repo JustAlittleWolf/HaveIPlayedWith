@@ -7,7 +7,6 @@ import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.sql.Statement;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -20,89 +19,12 @@ import java.util.UUID;
 import java.util.concurrent.Callable;
 
 /**
- * SmallSQL connection, schema, and queries. String columns store empty strings
- * instead of SQL NULL. All access goes through {@link StoreWorker}.
+ * SmallSQL connection and queries, over the tables {@link StoreSchema} defines. String
+ * columns store empty strings instead of SQL NULL. All access goes through
+ * {@link StoreWorker}.
  */
 final class StoreDb implements AutoCloseable {
     private static final String DRIVER = "smallsql.database.SSDriver";
-    private static final String[] TABLES = {
-        """
-        CREATE TABLE players (
-            player_uuid VARCHAR(36) PRIMARY KEY,
-            current_username VARCHAR(64) NOT NULL,
-            note LONGVARCHAR,
-            note_taken_at BIGINT,
-            total_minutes BIGINT,
-            session_count INT
-        )
-        """,
-        """
-        CREATE TABLE username_history (
-            player_uuid VARCHAR(36),
-            username_lower VARCHAR(64),
-            username VARCHAR(64),
-            last_seen BIGINT,
-            PRIMARY KEY (player_uuid, username_lower)
-        )
-        """,
-        """
-        CREATE TABLE name_index (
-            username_lower VARCHAR(64),
-            player_uuid VARCHAR(36),
-            PRIMARY KEY (username_lower, player_uuid)
-        )
-        """,
-        """
-        CREATE TABLE play_days (
-            player_uuid VARCHAR(36),
-            play_day VARCHAR(10),
-            minutes BIGINT,
-            PRIMARY KEY (player_uuid, play_day)
-        )
-        """,
-        """
-        CREATE TABLE play_sessions (
-            player_uuid VARCHAR(36),
-            session_id LONGVARCHAR,
-            minutes BIGINT,
-            PRIMARY KEY (player_uuid, session_id)
-        )
-        """,
-        """
-        CREATE TABLE play_servers (
-            player_uuid VARCHAR(36),
-            server_id LONGVARCHAR,
-            minutes BIGINT,
-            PRIMARY KEY (player_uuid, server_id)
-        )
-        """,
-        """
-        CREATE TABLE mojang_uuid (
-            player_uuid VARCHAR(36) PRIMARY KEY,
-            username VARCHAR(64),
-            fetched_at BIGINT
-        )
-        """,
-        """
-        CREATE TABLE mojang_name (
-            username_lower VARCHAR(64) PRIMARY KEY,
-            player_uuid VARCHAR(36),
-            username VARCHAR(64),
-            fetched_at BIGINT
-        )
-        """,
-        """
-        CREATE TABLE import_progress (
-            source_id VARCHAR(64) PRIMARY KEY,
-            processed BIGINT,
-            total BIGINT,
-            last_timestamp VARCHAR(64),
-            skip_count BIGINT,
-            status VARCHAR(32),
-            silenced BIT
-        )
-        """
-    };
 
     private final StoreWorker worker;
     private final Connection connection;
@@ -121,7 +43,7 @@ final class StoreDb implements AutoCloseable {
             Connection connection = DriverManager.getConnection("jdbc:smallsql:" + directory.toAbsolutePath(), properties);
             connection.setAutoCommit(false);
             StoreDb db = new StoreDb(new StoreWorker(connection), connection);
-            db.createTables();
+            StoreSchema.create(connection);
             connection.commit();
             return db;
         } catch (Exception e) {
@@ -341,7 +263,7 @@ final class StoreDb implements AutoCloseable {
                     rs.getLong(2),
                     lastTimestamp.isBlank() ? null : LocalDateTime.parse(lastTimestamp),
                     rs.getLong(4),
-                    rs.getString(5),
+                    ImportStatus.fromStorage(rs.getString(5)),
                     rs.getBoolean(6)
                 );
             },
@@ -351,24 +273,13 @@ final class StoreDb implements AutoCloseable {
 
     void saveImportProgress(ImportProgress progress) {
         String lastTimestamp = progress.lastTimestamp() == null ? "" : progress.lastTimestamp().toString();
+        String status = progress.status().storageName();
         upsert(
             "UPDATE import_progress SET processed = ?, total = ?, last_timestamp = ?, skip_count = ?, status = ?, silenced = ? WHERE source_id = ?",
-            List.of(progress.processed(), progress.total(), lastTimestamp, progress.skip(), progress.status(), progress.silenced(), progress.source()),
+            List.of(progress.processed(), progress.total(), lastTimestamp, progress.skip(), status, progress.silenced(), progress.source()),
             "INSERT INTO import_progress (source_id, processed, total, last_timestamp, skip_count, status, silenced) VALUES (?,?,?,?,?,?,?)",
-            List.of(progress.source(), progress.processed(), progress.total(), lastTimestamp, progress.skip(), progress.status(), progress.silenced())
+            List.of(progress.source(), progress.processed(), progress.total(), lastTimestamp, progress.skip(), status, progress.silenced())
         );
-    }
-
-    private void createTables() {
-        for (String sql : TABLES) {
-            try (Statement statement = connection.createStatement()) {
-                statement.execute(sql);
-            } catch (SQLException e) {
-                if (e.getMessage() == null || !e.getMessage().contains("already exists")) {
-                    throw wrap(e);
-                }
-            }
-        }
     }
 
     private void indexName(UUID uuid, String username) {

@@ -252,14 +252,14 @@ class PlayerStoreTest {
     void importProgressKeepsSilenceAcrossReopen() {
         try (PlayerStore players = open()) {
             players.importProgress().save(new ImportProgress(
-                ImportProgress.SOURCE_ALLTHELOGS, 12, 100, null, 0, ImportProgress.STATUS_RUNNING, true
+                ImportProgress.SOURCE_ALLTHELOGS, 12, 100, null, 0, ImportStatus.RUNNING, true
             ));
         }
         try (PlayerStore players = open()) {
             ImportProgress progress = players.importProgress().get(ImportProgress.SOURCE_ALLTHELOGS).orElseThrow();
             assertEquals(12, progress.processed());
             assertTrue(progress.silenced());
-            assertEquals(ImportProgress.STATUS_RUNNING, progress.status());
+            assertEquals(ImportStatus.RUNNING, progress.status());
         }
     }
 }

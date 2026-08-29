@@ -38,25 +38,26 @@ final class ChatStyle {
     }
 
     static MutableComponent username(String name) {
-        return username(name, (UUID) null, false);
+        return username(name, null, false);
     }
 
     static MutableComponent username(String name, UUID uuid) {
         return username(name, uuid, false);
     }
 
+    /** Hovers show the UUID, or an invitation to open NameMC when the UUID is unknown. */
     static MutableComponent username(String name, UUID uuid, boolean italic) {
         Component hover = uuid == null
             ? wording("haveiplayedwith.namemc.open")
             : data(uuid.toString(), UUID_COLOR);
-        return username(name, hover, italic);
+        return linkedUsername(name, hover, italic);
     }
 
-    static MutableComponent username(String name, Component hover) {
-        return username(name, hover, false);
+    static MutableComponent usernameWithHover(String name, Component hover) {
+        return linkedUsername(name, hover, false);
     }
 
-    static MutableComponent username(String name, Component hover, boolean italic) {
+    private static MutableComponent linkedUsername(String name, Component hover, boolean italic) {
         MutableComponent result = usernameText(name).withStyle(style -> style
             .withUnderlined(true)
             .withClickEvent(new ClickEvent.OpenUrl(URI.create("https://namemc.com/profile/" + name)))
