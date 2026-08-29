@@ -28,9 +28,6 @@ class ChatMessagesTest {
     void unplayedUsernamesAreItalic() {
         Component notPlayed = QueryMessages.notPlayedWith("Alex", STEVE);
         assertUsername(arg(notPlayed, 0), "Alex", true);
-
-        Component confirm = NoteMessages.noteConfirm("Alex", STEVE);
-        assertUsername(arg(confirm, 0), "Alex", true);
     }
 
     @Test
@@ -93,18 +90,6 @@ class ChatMessagesTest {
     }
 
     @Test
-    void clickHereIsUnderlinedGrayWording() {
-        Component confirm = NoteMessages.noteConfirm("Alex", STEVE);
-        assertUsername(arg(confirm, 0), "Alex", true);
-        Component click = arg(confirm, 1);
-        assertEquals("haveiplayedwith.note.confirm.click", key(click));
-        assertEquals(TextColor.GRAY.getValue(), click.getStyle().getColor().getValue());
-        assertEquals(true, click.getStyle().isUnderlined());
-        assertEquals(false, click.getStyle().isItalic());
-        assertInstanceOf(ClickEvent.RunCommand.class, click.getStyle().getClickEvent());
-    }
-
-    @Test
     void notesUseTheNoteColorAndCountTimestamps() {
         Component note = NoteMessages.note(snapshot());
         Component body = arg(note, 0);
@@ -115,6 +100,16 @@ class ChatMessagesTest {
         Component hoverText = hover.value();
         assertEquals("haveiplayedwith.note.taken", key(hoverText));
         assertEquals(ChatStyle.COUNT, color(arg(hoverText, 0)));
+    }
+
+    @Test
+    void noteStatusMessagesIncludeTheUsername() {
+        assertEquals("haveiplayedwith.note.saved", key(NoteMessages.noteSaved("Alex")));
+        assertUsername(arg(NoteMessages.noteSaved("Alex"), 0), "Alex", false);
+        assertEquals("haveiplayedwith.note.cleared", key(NoteMessages.noteCleared("Alex")));
+        assertUsername(arg(NoteMessages.noteCleared("Alex"), 0), "Alex", false);
+        assertEquals("haveiplayedwith.note.missing", key(NoteMessages.noteMissing("Alex")));
+        assertUsername(arg(NoteMessages.noteMissing("Alex"), 0), "Alex", false);
     }
 
     private static PlayerSnapshot snapshot() {

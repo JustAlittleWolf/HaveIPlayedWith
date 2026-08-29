@@ -34,15 +34,14 @@ public final class HaveIPlayedWithCommands {
                     return 1;
                 })));
         dispatcher.register(ClientCommands.literal("playernote")
-            .then(UnsuggestedLiteral.of("confirm")
-                .executes(context -> {
-                    notes.confirmPending(context.getSource());
-                    return 1;
-                }))
             .then(ClientCommands.argument("player", PlayerTargetArgument.player())
+                .executes(context -> {
+                    notes.show(context.getSource(), PlayerTargetArgument.get(context, "player"));
+                    return 1;
+                })
                 .then(ClientCommands.argument("note", StringArgumentType.greedyString())
                     .executes(context -> {
-                        notes.setNote(context.getSource(), PlayerTargetArgument.get(context, "player"),
+                        notes.write(context.getSource(), PlayerTargetArgument.get(context, "player"),
                             StringArgumentType.getString(context, "note"));
                         return 1;
                     }))));
