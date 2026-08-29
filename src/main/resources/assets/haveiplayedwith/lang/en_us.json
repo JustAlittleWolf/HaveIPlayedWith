@@ -5,7 +5,7 @@
   "haveiplayedwith.query.days": "%s days",
   "haveiplayedwith.query.sessions.one": "%s session",
   "haveiplayedwith.query.sessions": "%s sessions",
-  "haveiplayedwith.query.sessions.across": "Played together over %s",
+  "haveiplayedwith.query.sessions.across": "Played together in %s",
   "haveiplayedwith.query.duration.for": "Played together for %s",
   "haveiplayedwith.query.last_played": "Last played together %s",
   "haveiplayedwith.query.last_played.today": "Last played together today",
