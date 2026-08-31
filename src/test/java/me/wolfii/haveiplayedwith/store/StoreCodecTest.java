@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -47,6 +48,70 @@ class StoreCodecTest {
         assertEquals(2, copy.daysPlayed);
         assertEquals("Steve", copy.names.get(1).username());
         assertEquals("hypixel.net", copy.snapshot().mostPlayedServer().orElseThrow().serverId());
+        assertEquals(List.of(
+            (int) LocalDate.of(2026, 8, 1).toEpochDay(),
+            (int) LocalDate.of(2026, 8, 2).toEpochDay()
+        ), copy.recentDays);
         assertTrue(StoreCodec.encodePlayer(player).length < 200);
+        assertEquals(StoreCodec.VERSION, StoreCodec.encodePlayer(player)[0] & 0xff);
+    }
+
+    @Test
+    void playerRoundTripKeepsEveryPlayDayAndCapsSessions() {
+        UUID uuid = UUID.fromString("61699b2e-d327-4a01-9f1e-0ea8c3f06bc6");
+        PlayerRecord player = new PlayerRecord(uuid);
+        player.setCurrentUsername("Steve");
+        LocalDate start = LocalDate.of(2026, 1, 1);
+        for (int day = 0; day < 300; day++) {
+            player.credit(start.plusDays(day), "live:" + day, "hypixel.net");
+        }
+        assertEquals(300, player.daysPlayed);
+        assertEquals(300, player.recentDays.size());
+        assertEquals(PlayerRecord.KEEP_RECENT, player.sessions.size());
+
+        PlayerRecord copy = StoreCodec.decodePlayer(uuid, StoreCodec.encodePlayer(player));
+        assertEquals(300, copy.daysPlayed);
+        assertEquals(300, copy.recentDays.size());
+        assertEquals((int) start.toEpochDay(), copy.recentDays.getFirst());
+        assertEquals((int) start.plusDays(299).toEpochDay(), copy.recentDays.getLast());
+        assertEquals(PlayerRecord.KEEP_RECENT, copy.sessions.size());
+        assertEquals("live:299", copy.sessions.getLast().id);
+    }
+
+    @Test
+    void readsVersionOnePlayerRowsWithASingleByteDayCount() {
+        UUID uuid = UUID.fromString("61699b2e-d327-4a01-9f1e-0ea8c3f06bc6");
+        byte[] versionOne = {
+            1, 0, 0,
+            0, 0, 0, 1,
+            0, 0, 0, 1,
+            0, 0, 0, 2,
+            2,
+            0, 0, 0x4e, 0x46,
+            0, 0, 0x4e, 0x47,
+            0, 0, 0
+        };
+        PlayerRecord player = StoreCodec.decodePlayer(uuid, versionOne);
+        assertEquals(1, player.totalMinutes);
+        assertEquals(1, player.sessionCount);
+        assertEquals(2, player.daysPlayed);
+        assertEquals(List.of(0x4e46, 0x4e47), player.recentDays);
+        assertTrue(player.sessions.isEmpty());
+        assertTrue(player.servers.isEmpty());
+        assertTrue(player.names.isEmpty());
+    }
+
+    @Test
+    void readsVersionOneProfileRows() {
+        UUID uuid = UUID.fromString("61699b2e-d327-4a01-9f1e-0ea8c3f06bc6");
+        Instant lastValid = Instant.parse("2026-08-01T00:00:00Z");
+        byte[] current = StoreCodec.encodeProfile(new ProfileMapping(uuid, "Steve", lastValid));
+        assertEquals(StoreCodec.VERSION, current[0] & 0xff);
+        byte[] versionOne = current.clone();
+        versionOne[0] = 1;
+        ProfileMapping mapping = StoreCodec.decodeProfile(uuid, versionOne);
+        assertEquals(uuid, mapping.uuid());
+        assertEquals("Steve", mapping.username());
+        assertEquals(lastValid, mapping.lastValid());
     }
 }

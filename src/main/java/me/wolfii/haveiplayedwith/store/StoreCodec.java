@@ -4,17 +4,27 @@ import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.util.Map;
 import java.util.UUID;
+import java.util.function.UnaryOperator;
 
 /**
  * Binary layout for player and profile rows. Values are length-prefixed bytes
  * with no per-row field names. UUIDs are two big-endian longs (16 bytes).
  * Minecraft usernames use a 6-bit {@code [A-Za-z0-9_]} pack; other strings are UTF-8.
+ * Older rows are rewritten to {@link #VERSION} before they are decoded. Each
+ * step applies an updater for that version when one exists, then stamps
+ * {@code version + 1}. Missing updaters mean the payload is unchanged.
  */
 final class StoreCodec {
-    static final int VERSION = 1;
+    static final int VERSION = 2;
     private static final String NAME_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_";
     private static final int UTF_FLAG = 0x80;
+    /** Payload rewrites keyed by the version they consume. Omit a version when the layout is unchanged. */
+    private static final Map<Integer, UnaryOperator<byte[]>> PLAYER_UPDATES = Map.of(
+        1, StoreCodec::updatePlayer1
+    );
+    private static final Map<Integer, UnaryOperator<byte[]>> PROFILE_UPDATES = Map.of();
 
     private StoreCodec() {
     }
@@ -44,7 +54,7 @@ final class StoreCodec {
         writeUnsignedInt(out, player.totalMinutes);
         writeUnsignedInt(out, player.sessionCount);
         writeUnsignedInt(out, player.daysPlayed);
-        out.write(player.recentDays.size());
+        writeUnsignedInt(out, player.recentDays.size());
         for (int day : player.recentDays) {
             writeUnsignedInt(out, day);
         }
@@ -67,7 +77,7 @@ final class StoreCodec {
     }
 
     static PlayerRecord decodePlayer(UUID uuid, byte[] bytes) {
-        ByteBuffer in = ByteBuffer.wrap(bytes);
+        ByteBuffer in = ByteBuffer.wrap(toCurrent(bytes, PLAYER_UPDATES, "player"));
         int version = in.get() & 0xff;
         if (version != VERSION) {
             throw new IllegalStateException("Unsupported HaveIPlayedWith player row version " + version);
@@ -82,7 +92,7 @@ final class StoreCodec {
         player.totalMinutes = readUnsignedInt(in);
         player.sessionCount = (int) readUnsignedInt(in);
         player.daysPlayed = (int) readUnsignedInt(in);
-        int dayCount = in.get() & 0xff;
+        int dayCount = (int) readUnsignedInt(in);
         for (int i = 0; i < dayCount; i++) {
             player.recentDays.add((int) readUnsignedInt(in));
         }
@@ -110,7 +120,7 @@ final class StoreCodec {
     }
 
     static ProfileMapping decodeProfile(UUID uuid, byte[] bytes) {
-        ByteBuffer in = ByteBuffer.wrap(bytes);
+        ByteBuffer in = ByteBuffer.wrap(toCurrent(bytes, PROFILE_UPDATES, "profile"));
         int version = in.get() & 0xff;
         if (version != VERSION) {
             throw new IllegalStateException("Unsupported HaveIPlayedWith profile row version " + version);
@@ -132,6 +142,63 @@ final class StoreCodec {
 
     static byte[] nameKey(String usernameLower) {
         return usernameLower.getBytes(StandardCharsets.UTF_8);
+    }
+
+    private static byte[] toCurrent(byte[] bytes, Map<Integer, UnaryOperator<byte[]>> updates, String kind) {
+        if (bytes == null || bytes.length == 0) {
+            throw new IllegalStateException("Empty HaveIPlayedWith " + kind + " row");
+        }
+        byte[] current = bytes;
+        int version = current[0] & 0xff;
+        if (version > VERSION) {
+            throw new IllegalStateException("Unsupported HaveIPlayedWith " + kind + " row version " + version);
+        }
+        while (version < VERSION) {
+            UnaryOperator<byte[]> update = updates.get(version);
+            byte[] next;
+            if (update == null) {
+                next = current.clone();
+            } else {
+                next = update.apply(current);
+                if (next == null || next.length == 0) {
+                    throw new IllegalStateException("HaveIPlayedWith " + kind + " migration from version " + version + " returned an empty row");
+                }
+                if (next == current) {
+                    next = current.clone();
+                }
+            }
+            next[0] = (byte) (version + 1);
+            current = next;
+            version++;
+        }
+        return current;
+    }
+
+    /** v1 stored the play-day list length in one byte. */
+    private static byte[] updatePlayer1(byte[] bytes) {
+        ByteBuffer in = ByteBuffer.wrap(bytes);
+        in.get();
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        out.write(0);
+        int flags = in.get() & 0xff;
+        out.write(flags);
+        writeName(out, readName(in));
+        if ((flags & 1) != 0) {
+            writeUtf(out, readUtf(in));
+            writeLong(out, in.getLong());
+        }
+        writeUnsignedInt(out, readUnsignedInt(in));
+        writeUnsignedInt(out, readUnsignedInt(in));
+        writeUnsignedInt(out, readUnsignedInt(in));
+        int dayCount = in.get() & 0xff;
+        writeUnsignedInt(out, dayCount);
+        for (int i = 0; i < dayCount; i++) {
+            writeUnsignedInt(out, readUnsignedInt(in));
+        }
+        byte[] rest = new byte[in.remaining()];
+        in.get(rest);
+        out.writeBytes(rest);
+        return out.toByteArray();
     }
 
     private static void writeName(ByteArrayOutputStream out, String name) {

@@ -9,9 +9,9 @@ import java.util.Optional;
 import java.util.UUID;
 
 /**
- * One player’s live row. Lifetime totals stay here; only the last
- * {@link #KEEP_RECENT} play days and sessions are kept. Server and past-name
- * lists stay within {@link #KEEP_HISTORY} so the on-disk count byte cannot wrap.
+ * One player’s live row. Lifetime totals and every play day stay here; only
+ * the last {@link #KEEP_RECENT} sessions are kept. Server and past-name lists
+ * stay within {@link #KEEP_HISTORY} so the on-disk count byte cannot wrap.
  */
 final class PlayerRecord {
     static final int KEEP_RECENT = 5;
@@ -67,9 +67,6 @@ final class PlayerRecord {
             daysPlayed++;
             recentDays.add(epochDay);
             recentDays.sort(null);
-            while (recentDays.size() > KEEP_RECENT) {
-                recentDays.removeFirst();
-            }
         }
         totalMinutes++;
         addServerMinute(serverId);
