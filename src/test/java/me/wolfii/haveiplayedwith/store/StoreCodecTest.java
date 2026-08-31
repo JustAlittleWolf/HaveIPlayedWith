@@ -53,6 +53,7 @@ class StoreCodecTest {
             (int) LocalDate.of(2026, 8, 2).toEpochDay()
         ), copy.recentDays);
         assertTrue(StoreCodec.encodePlayer(player).length < 200);
+        assertEquals(StoreCodec.VERSION, StoreCodec.encodePlayer(player)[0] & 0xff);
     }
 
     @Test
@@ -98,5 +99,19 @@ class StoreCodecTest {
         assertTrue(player.sessions.isEmpty());
         assertTrue(player.servers.isEmpty());
         assertTrue(player.names.isEmpty());
+    }
+
+    @Test
+    void readsVersionOneProfileRows() {
+        UUID uuid = UUID.fromString("61699b2e-d327-4a01-9f1e-0ea8c3f06bc6");
+        Instant lastValid = Instant.parse("2026-08-01T00:00:00Z");
+        byte[] current = StoreCodec.encodeProfile(new ProfileMapping(uuid, "Steve", lastValid));
+        assertEquals(StoreCodec.VERSION, current[0] & 0xff);
+        byte[] versionOne = current.clone();
+        versionOne[0] = 1;
+        ProfileMapping mapping = StoreCodec.decodeProfile(uuid, versionOne);
+        assertEquals(uuid, mapping.uuid());
+        assertEquals("Steve", mapping.username());
+        assertEquals(lastValid, mapping.lastValid());
     }
 }
