@@ -12,20 +12,19 @@ import java.util.function.UnaryOperator;
  * Binary layout for player and profile rows. Values are length-prefixed bytes
  * with no per-row field names. UUIDs are two big-endian longs (16 bytes).
  * Minecraft usernames use a 6-bit {@code [A-Za-z0-9_]} pack; other strings are UTF-8.
- * Older rows are rewritten to {@link #VERSION} by chained version updater functions
- * before they are decoded.
+ * Older rows are rewritten to {@link #VERSION} before they are decoded. Each
+ * step applies an updater for that version when one exists, then stamps
+ * {@code version + 1}. Missing updaters mean the payload is unchanged.
  */
 final class StoreCodec {
     static final int VERSION = 2;
     private static final String NAME_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_";
     private static final int UTF_FLAG = 0x80;
-    /** Each updater reads version {@code n} and must write version {@code n + 1}. */
+    /** Payload rewrites keyed by the version they consume. Omit a version when the layout is unchanged. */
     private static final Map<Integer, UnaryOperator<byte[]>> PLAYER_UPDATES = Map.of(
         1, StoreCodec::updatePlayer1
     );
-    private static final Map<Integer, UnaryOperator<byte[]>> PROFILE_UPDATES = Map.of(
-        1, StoreCodec::updateProfile1
-    );
+    private static final Map<Integer, UnaryOperator<byte[]>> PROFILE_UPDATES = Map.of();
 
     private StoreCodec() {
     }
@@ -156,18 +155,21 @@ final class StoreCodec {
         }
         while (version < VERSION) {
             UnaryOperator<byte[]> update = updates.get(version);
+            byte[] next;
             if (update == null) {
-                throw new IllegalStateException("No HaveIPlayedWith " + kind + " migration from version " + version);
+                next = current.clone();
+            } else {
+                next = update.apply(current);
+                if (next == null || next.length == 0) {
+                    throw new IllegalStateException("HaveIPlayedWith " + kind + " migration from version " + version + " returned an empty row");
+                }
+                if (next == current) {
+                    next = current.clone();
+                }
             }
-            current = update.apply(current);
-            if (current == null || current.length == 0) {
-                throw new IllegalStateException("HaveIPlayedWith " + kind + " migration from version " + version + " returned an empty row");
-            }
-            int next = current[0] & 0xff;
-            if (next <= version) {
-                throw new IllegalStateException("HaveIPlayedWith " + kind + " migration from version " + version + " did not advance");
-            }
-            version = next;
+            next[0] = (byte) (version + 1);
+            current = next;
+            version++;
         }
         return current;
     }
@@ -175,11 +177,9 @@ final class StoreCodec {
     /** v1 stored the play-day list length in one byte. */
     private static byte[] updatePlayer1(byte[] bytes) {
         ByteBuffer in = ByteBuffer.wrap(bytes);
-        if ((in.get() & 0xff) != 1) {
-            throw new IllegalStateException("Expected HaveIPlayedWith player row version 1");
-        }
+        in.get();
         ByteArrayOutputStream out = new ByteArrayOutputStream();
-        out.write(2);
+        out.write(0);
         int flags = in.get() & 0xff;
         out.write(flags);
         writeName(out, readName(in));
@@ -199,16 +199,6 @@ final class StoreCodec {
         in.get(rest);
         out.writeBytes(rest);
         return out.toByteArray();
-    }
-
-    /** v1 profile payload matches v2; only the version byte changes. */
-    private static byte[] updateProfile1(byte[] bytes) {
-        if ((bytes[0] & 0xff) != 1) {
-            throw new IllegalStateException("Expected HaveIPlayedWith profile row version 1");
-        }
-        byte[] next = bytes.clone();
-        next[0] = 2;
-        return next;
     }
 
     private static void writeName(ByteArrayOutputStream out, String name) {
