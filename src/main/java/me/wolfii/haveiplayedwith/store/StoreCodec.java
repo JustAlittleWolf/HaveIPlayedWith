@@ -13,6 +13,8 @@ import java.util.UUID;
  */
 final class StoreCodec {
     static final int VERSION = 1;
+    /** Player rows store an unsigned-int play-day count so the day list is not capped at 255. */
+    static final int PLAYER_VERSION = 2;
     private static final String NAME_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_";
     private static final int UTF_FLAG = 0x80;
 
@@ -33,7 +35,7 @@ final class StoreCodec {
 
     static byte[] encodePlayer(PlayerRecord player) {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
-        out.write(VERSION);
+        out.write(PLAYER_VERSION);
         int flags = player.note.isBlank() ? 0 : 1;
         out.write(flags);
         writeName(out, player.username);
@@ -44,7 +46,7 @@ final class StoreCodec {
         writeUnsignedInt(out, player.totalMinutes);
         writeUnsignedInt(out, player.sessionCount);
         writeUnsignedInt(out, player.daysPlayed);
-        out.write(player.recentDays.size());
+        writeUnsignedInt(out, player.recentDays.size());
         for (int day : player.recentDays) {
             writeUnsignedInt(out, day);
         }
@@ -69,7 +71,7 @@ final class StoreCodec {
     static PlayerRecord decodePlayer(UUID uuid, byte[] bytes) {
         ByteBuffer in = ByteBuffer.wrap(bytes);
         int version = in.get() & 0xff;
-        if (version != VERSION) {
+        if (version != VERSION && version != PLAYER_VERSION) {
             throw new IllegalStateException("Unsupported HaveIPlayedWith player row version " + version);
         }
         PlayerRecord player = new PlayerRecord(uuid);
@@ -82,7 +84,7 @@ final class StoreCodec {
         player.totalMinutes = readUnsignedInt(in);
         player.sessionCount = (int) readUnsignedInt(in);
         player.daysPlayed = (int) readUnsignedInt(in);
-        int dayCount = in.get() & 0xff;
+        int dayCount = version == VERSION ? in.get() & 0xff : (int) readUnsignedInt(in);
         for (int i = 0; i < dayCount; i++) {
             player.recentDays.add((int) readUnsignedInt(in));
         }

@@ -216,7 +216,7 @@ class PlayerStoreTest {
     }
 
     @Test
-    void keepsOnlyTheLastFiveDaysAndSessions() {
+    void keepsEveryPlayDayAndOnlyTheLastFiveSessions() {
         LocalDate today = LocalDate.now();
         UUID uuid = UUID.randomUUID();
         try (PlayerStore players = open()) {
