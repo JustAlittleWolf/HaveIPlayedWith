@@ -57,8 +57,8 @@ public final class PlayerObserver {
     private final NotedMinutes lastNotedMinute = new NotedMinutes();
     private final ConcurrentHashMap<UUID, Long> creditedMinute = new ConcurrentHashMap<>();
     private final MinuteScheduler minutes = new MinuteScheduler();
-    private final AfkObserver afk;
-    private final ProximityObserver proximity;
+    private final AfkObserver afkObserver;
+    private final ProximityObserver proximityObserver;
     private final TickPass pass = new TickPass();
     private volatile long currentMinute = Long.MIN_VALUE;
     /** One id for this client run, assigned at boot and kept across join/disconnect. */
@@ -68,8 +68,8 @@ public final class PlayerObserver {
     public PlayerObserver(PlayerStore players, ProfileApi profiles) {
         this.players = players;
         this.profiles = profiles;
-        this.afk = new AfkObserver(players, minutes);
-        this.proximity = new ProximityObserver(players, minutes);
+        this.afkObserver = new AfkObserver(players, minutes);
+        this.proximityObserver = new ProximityObserver(players, minutes);
         dispatcher.execute(this::dispatchLoop);
         lookupWorker.execute(this::lookupLoop);
     }
@@ -84,8 +84,8 @@ public final class PlayerObserver {
             currentServerId = null;
             lastNotedMinute.clear();
             creditedMinute.clear();
-            afk.clear();
-            proximity.clear();
+            afkObserver.clear();
+            proximityObserver.clear();
             currentMinute = Long.MIN_VALUE;
         });
         ClientTickEvents.END_CLIENT_TICK.register(this::tick);
@@ -107,8 +107,8 @@ public final class PlayerObserver {
         if (serverId == null) {
             return;
         }
-        afk.tick(client, epochMinute);
-        proximity.tick(client, epochMinute);
+        afkObserver.tick(client, epochMinute);
+        proximityObserver.tick(client, epochMinute);
         pass.reset(epochMinute, serverId);
         ClientPacketListener connection = client.getConnection();
         for (PlayerInfo info : connection.getListedOnlinePlayers()) {
