@@ -86,10 +86,6 @@ final class PlayerRecord {
         addServerMinute(serverId);
     }
 
-    void addNearbyMinutes(long minutes) {
-        nearbyMinutes += minutes;
-    }
-
     long minutesForSession(String sessionId) {
         for (Session session : sessions) {
             if (session.id.equals(sessionId)) {

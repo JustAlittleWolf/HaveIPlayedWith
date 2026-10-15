@@ -59,8 +59,8 @@ public final class PlayerStore implements AutoCloseable {
     }
 
     /**
-     * @param clientAfk this client was idle when the minute was recorded
-     * @param nearby this player was within 100 blocks during the minute
+     * @param clientAfk this client was past Minecraft's AFK input threshold when the minute was recorded
+     * @param nearby this player was within 100 blocks when the minute was recorded
      * @return the last name this player was seen as, when the new username is different
      */
     public Optional<String> recordLivePlay(
@@ -76,11 +76,6 @@ public final class PlayerStore implements AutoCloseable {
             throw new IllegalArgumentException("serverId");
         }
         return db.call(() -> db.recordLivePlay(uuid, username, day, sessionId, serverId, clientAfk, nearby));
-    }
-
-    /** One nearby minute for a player already being credited, or about to be. */
-    public void recordNearbyMinute(UUID uuid) {
-        db.execute(() -> db.recordNearbyMinute(uuid));
     }
 
     public Optional<String> applyUsername(UUID uuid, String username, Instant fetchedAt) {

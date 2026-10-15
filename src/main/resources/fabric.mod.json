@@ -13,6 +13,7 @@
   "license": "MIT",
   "icon": "assets/haveiplayedwith/icon.png",
   "environment": "client",
+  "accessWidener": "haveiplayedwith.accesswidener",
   "entrypoints": {
     "client": [
       "me.wolfii.haveiplayedwith.HaveIPlayedWith"

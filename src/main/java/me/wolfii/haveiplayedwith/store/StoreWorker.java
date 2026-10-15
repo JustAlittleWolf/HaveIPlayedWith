@@ -46,17 +46,6 @@ final class StoreWorker implements AutoCloseable {
         });
     }
 
-    /** Queues work without waiting. Later {@link #call} tasks still run after it. */
-    void execute(StoreWork task) {
-        worker.execute(() -> {
-            try {
-                task.run();
-            } catch (Exception e) {
-                ModLog.LOGGER.warn("HaveIPlayedWith store task failed", e);
-            }
-        });
-    }
-
     void close(StoreWork shutdown) {
         try {
             worker.submit(() -> {

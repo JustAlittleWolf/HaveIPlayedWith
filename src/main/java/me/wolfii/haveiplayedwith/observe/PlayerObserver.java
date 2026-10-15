@@ -1,6 +1,7 @@
 package me.wolfii.haveiplayedwith.observe;
 
 import com.mojang.authlib.GameProfile;
+import com.mojang.blaze3d.platform.FramerateLimitTracker;
 import me.wolfii.haveiplayedwith.MinecraftUsernames;
 import me.wolfii.haveiplayedwith.ModLog;
 import me.wolfii.haveiplayedwith.ModThreads;
@@ -15,10 +16,13 @@ import net.minecraft.client.multiplayer.PlayerInfo;
 import net.minecraft.client.player.AbstractClientPlayer;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.network.chat.Component;
+import net.minecraft.util.Util;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.HashSet;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
@@ -30,8 +34,10 @@ import java.util.concurrent.ExecutorService;
  * quickly. Each UUID is only queued once per calendar minute, stored on that UUID rather
  * than wiped globally, so a minute change does not re-offer everyone at once.
  *
- * <p>Each credited minute also records whether this client was AFK and whether that player
- * was within {@link Proximity#NEARBY_BLOCKS} blocks at any point during the minute.
+ * <p>The minute is sampled once, when that player is first seen. It counts as AFK when
+ * {@link FramerateLimitTracker}'s last input is older than Minecraft's AFK threshold, and as
+ * nearby when that player is within {@link Proximity#NEARBY_BLOCKS} blocks on that tick.
+ * Both are subsets of the play minute; going AFK or walking into range later does not change it.
  *
  * <p>The client thread only reads game profiles and hands them to {@link #sightings}; every cache
  * read, API call and database write happens on one of this class' own threads.
@@ -56,8 +62,8 @@ public final class PlayerObserver {
     private final BlockingQueue<UUID> lookups = new ArrayBlockingQueue<>(MAX_LOOKUP_BUFFER);
     /** Calendar minute this UUID was last handed to {@link #sightings}. */
     private final ConcurrentHashMap<UUID, Long> lastNotedMinute = new ConcurrentHashMap<>();
-    private final PresenceMinutes presence = new PresenceMinutes();
-    private final ClientAfk afk = new ClientAfk();
+    private final ConcurrentHashMap<UUID, Long> creditedMinute = new ConcurrentHashMap<>();
+    private final Set<UUID> nearbyNow = new HashSet<>();
     private final TickPass pass = new TickPass();
     private volatile long currentMinute = Long.MIN_VALUE;
     /** One id for this client run, assigned at boot and kept across join/disconnect. */
@@ -77,22 +83,16 @@ public final class PlayerObserver {
     public void register() {
         ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> currentServerId = ServerId.current(client));
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
-            if (currentMinute != Long.MIN_VALUE) {
-                flushNearby(currentMinute);
-            }
             currentServerId = null;
-            presence.clear();
             lastNotedMinute.clear();
+            creditedMinute.clear();
+            nearbyNow.clear();
             currentMinute = Long.MIN_VALUE;
-            afk.resetBaseline();
         });
         ClientTickEvents.END_CLIENT_TICK.register(this::tick);
     }
 
     public void close() {
-        if (currentMinute != Long.MIN_VALUE) {
-            flushNearby(currentMinute);
-        }
         dispatcher.shutdownNow();
         lookupWorker.shutdownNow();
     }
@@ -103,14 +103,12 @@ public final class PlayerObserver {
         }
         long epochMinute = System.currentTimeMillis() / 60_000L;
         pruneIfNewMinute(epochMinute);
-        LocalPlayer self = client.player;
-        boolean clientAfk = afk.tick(client);
-        markNearby(self, client.level.players(), epochMinute);
+        markNearby(client.player, client.level.players());
         String serverId = resolveServerId(client);
         if (serverId == null) {
             return;
         }
-        pass.reset(epochMinute, serverId, clientAfk);
+        pass.reset(epochMinute, serverId, clientAfk(client));
         ClientPacketListener connection = client.getConnection();
         for (PlayerInfo info : connection.getListedOnlinePlayers()) {
             if (!offer(info.getProfile(), pass)) {
@@ -129,16 +127,20 @@ public final class PlayerObserver {
         if (epochMinute == currentMinute) {
             return;
         }
-        if (currentMinute != Long.MIN_VALUE) {
-            flushNearby(currentMinute);
-        }
         currentMinute = epochMinute;
         long keepAfter = epochMinute - CREDIT_MEMORY_MINUTES;
         lastNotedMinute.values().removeIf(minute -> minute < keepAfter);
-        presence.prune(keepAfter);
+        creditedMinute.values().removeIf(minute -> minute < keepAfter);
     }
 
-    private void markNearby(LocalPlayer self, Iterable<AbstractClientPlayer> others, long epochMinute) {
+    /** Same threshold {@link FramerateLimitTracker} uses before it throttles the framerate. */
+    private static boolean clientAfk(Minecraft client) {
+        FramerateLimitTracker tracker = client.getFramerateLimitTracker();
+        return Util.getMillis() - tracker.latestInputTime > FramerateLimitTracker.AFK_THRESHOLD_MS;
+    }
+
+    private void markNearby(LocalPlayer self, Iterable<AbstractClientPlayer> others) {
+        nearbyNow.clear();
         for (AbstractClientPlayer other : others) {
             if (other == null || other == self) {
                 continue;
@@ -148,14 +150,8 @@ public final class PlayerObserver {
                 continue;
             }
             if (Proximity.nearby(other.getX() - self.getX(), other.getY() - self.getY(), other.getZ() - self.getZ())) {
-                presence.markNearby(uuid, epochMinute);
+                nearbyNow.add(uuid);
             }
-        }
-    }
-
-    private void flushNearby(long minute) {
-        for (UUID uuid : presence.lateNearby(minute)) {
-            players.recordNearbyMinute(uuid);
         }
     }
 
@@ -193,8 +189,7 @@ public final class PlayerObserver {
         }
         LocalDate day = pass.day();
         lastNotedMinute.put(uuid, pass.epochMinute);
-        boolean nearby = presence.wasNearby(uuid, pass.epochMinute);
-        if (!sightings.offer(new Sighting(uuid, name, day, pass.epochMinute, pass.serverId, pass.clientAfk, nearby))) {
+        if (!sightings.offer(new Sighting(uuid, name, day, pass.epochMinute, pass.serverId, pass.clientAfk, nearbyNow.contains(uuid)))) {
             lastNotedMinute.remove(uuid, pass.epochMinute);
             return false;
         }
@@ -260,11 +255,11 @@ public final class PlayerObserver {
     }
 
     private void credit(Sighting sighting) {
-        if (!presence.markCredited(sighting.uuid(), sighting.epochMinute())) {
+        Long last = creditedMinute.put(sighting.uuid(), sighting.epochMinute());
+        if (last != null && last == sighting.epochMinute()) {
             announceRename(sighting.uuid(), players.applyUsername(sighting.uuid(), sighting.username(), Instant.now()), sighting.username());
             return;
         }
-        boolean nearby = presence.nearbyForCredit(sighting.uuid(), sighting.epochMinute(), sighting.nearby());
         announceRename(
             sighting.uuid(),
             players.recordLivePlay(
@@ -274,7 +269,7 @@ public final class PlayerObserver {
                 liveSessionId(),
                 sighting.serverId(),
                 sighting.clientAfk(),
-                nearby
+                sighting.nearby()
             ),
             sighting.username()
         );

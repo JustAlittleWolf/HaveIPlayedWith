@@ -1,0 +1,4 @@
+accessWidener v2 official
+
+accessible field com/mojang/blaze3d/platform/FramerateLimitTracker latestInputTime J
+accessible field com/mojang/blaze3d/platform/FramerateLimitTracker AFK_THRESHOLD_MS J
