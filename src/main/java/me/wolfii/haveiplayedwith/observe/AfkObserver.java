@@ -1,11 +1,11 @@
 package me.wolfii.haveiplayedwith.observe;
 
 import me.wolfii.haveiplayedwith.mixin.FramerateLimitTrackerAccessor;
-import me.wolfii.haveiplayedwith.store.PlayerStore;
 import net.minecraft.client.Minecraft;
-
-import java.util.function.Predicate;
 import net.minecraft.util.Util;
+
+import java.util.UUID;
+import java.util.function.Predicate;
 
 /**
  * Counts a minute as AFK when the client has had no input for {@link #AFK_AFTER_MS}.
@@ -14,12 +14,10 @@ import net.minecraft.util.Util;
 final class AfkObserver extends PlayerMinuteObserver {
     static final long AFK_AFTER_MS = 60_000L;
 
-    private final PlayerStore playerStore;
-    private final Predicate<Runnable> enqueueWrite;
+    private final Predicate<UUID> enqueueMinute;
 
-    AfkObserver(PlayerStore playerStore, Predicate<Runnable> enqueueWrite) {
-        this.playerStore = playerStore;
-        this.enqueueWrite = enqueueWrite;
+    AfkObserver(Predicate<UUID> enqueueMinute) {
+        this.enqueueMinute = enqueueMinute;
     }
 
     static boolean isAfk(long latestInputMillis, long nowMillis) {
@@ -37,6 +35,6 @@ final class AfkObserver extends PlayerMinuteObserver {
         if (!isClientAfk(client)) {
             return;
         }
-        observeAllPlayers(client, epochMinute, profile -> enqueueWrite.test(() -> playerStore.recordAfkMinute(profile.id())));
+        observeAllPlayers(client, epochMinute, profile -> enqueueMinute.test(profile.id()));
     }
 }

@@ -1,13 +1,11 @@
 package me.wolfii.haveiplayedwith.observe;
 
-import me.wolfii.haveiplayedwith.store.PlayerStore;
 import net.minecraft.client.Minecraft;
-
-import java.util.function.Predicate;
 import net.minecraft.client.player.AbstractClientPlayer;
 import net.minecraft.client.player.LocalPlayer;
 
 import java.util.UUID;
+import java.util.function.Predicate;
 
 /**
  * Counts a minute as nearby when another player is within {@link #NEARBY_RADIUS_BLOCKS}
@@ -18,12 +16,10 @@ final class NearbyPlayerObserver extends PlayerMinuteObserver {
     static final double NEARBY_RADIUS_BLOCKS = 100.0;
     private static final double NEARBY_RADIUS_SQUARED = NEARBY_RADIUS_BLOCKS * NEARBY_RADIUS_BLOCKS;
 
-    private final PlayerStore playerStore;
-    private final Predicate<Runnable> enqueueWrite;
+    private final Predicate<UUID> enqueueMinute;
 
-    NearbyPlayerObserver(PlayerStore playerStore, Predicate<Runnable> enqueueWrite) {
-        this.playerStore = playerStore;
-        this.enqueueWrite = enqueueWrite;
+    NearbyPlayerObserver(Predicate<UUID> enqueueMinute) {
+        this.enqueueMinute = enqueueMinute;
     }
 
     static boolean isNearby(double dx, double dy, double dz) {
@@ -38,7 +34,7 @@ final class NearbyPlayerObserver extends PlayerMinuteObserver {
             if (!withinRange(self, other)) {
                 continue;
             }
-            if (!offer(other.getGameProfile(), epochMinute, profile -> enqueueWrite.test(() -> playerStore.recordNearbyMinute(profile.id())))) {
+            if (!offer(other.getGameProfile(), epochMinute, profile -> enqueueMinute.test(profile.id()))) {
                 return;
             }
         }
