@@ -51,8 +51,6 @@ public final class PlayerObserver {
     /** Sightings waiting to be classified as "needs a lookup" or "already known". */
     private static final int MAX_SIGHTING_BUFFER = 2048;
     private static final long CREDIT_MEMORY_MINUTES = 60;
-    /** No input for this long counts as AFK. Read from the framerate limiter's last input time. */
-    private static final long AFK_AFTER_MS = 60_000L;
     private final PlayerStore players;
     private final ProfileApi profiles;
     private final ExecutorService dispatcher = ModThreads.singleWorker("sightings");
@@ -60,11 +58,11 @@ public final class PlayerObserver {
     private final BlockingQueue<Notice> sightings = new ArrayBlockingQueue<>(MAX_SIGHTING_BUFFER);
     private final ConcurrentHashMap<UUID, Sighting> pendingLookups = new ConcurrentHashMap<>();
     private final BlockingQueue<UUID> lookups = new ArrayBlockingQueue<>(MAX_LOOKUP_BUFFER);
-    /** Calendar minute this UUID was last handed to {@link #sightings}. */
-    private final ConcurrentHashMap<UUID, Long> lastNotedMinute = new ConcurrentHashMap<>();
+    /** Calendar minute this UUID was last handed to {@link #sightings} for play time. */
+    private final NotedMinutes lastNotedMinute = new NotedMinutes();
     private final ConcurrentHashMap<UUID, Long> creditedMinute = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<UUID, Long> lastAfkMinute = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<UUID, Long> lastNearbyMinute = new ConcurrentHashMap<>();
+    private final NotedMinutes lastAfkMinute = new NotedMinutes();
+    private final NotedMinutes lastNearbyMinute = new NotedMinutes();
     private final Set<UUID> nearbyNow = new HashSet<>();
     private final TickPass pass = new TickPass();
     private volatile long currentMinute = Long.MIN_VALUE;
@@ -133,15 +131,15 @@ public final class PlayerObserver {
         }
         currentMinute = epochMinute;
         long keepAfter = epochMinute - CREDIT_MEMORY_MINUTES;
-        lastNotedMinute.values().removeIf(minute -> minute < keepAfter);
+        lastNotedMinute.pruneBefore(keepAfter);
         creditedMinute.values().removeIf(minute -> minute < keepAfter);
-        lastAfkMinute.values().removeIf(minute -> minute < keepAfter);
-        lastNearbyMinute.values().removeIf(minute -> minute < keepAfter);
+        lastAfkMinute.pruneBefore(keepAfter);
+        lastNearbyMinute.pruneBefore(keepAfter);
     }
 
     private static boolean clientAfk(Minecraft client) {
         long latestInput = ((FramerateLimitTrackerAccessor) client.getFramerateLimitTracker()).haveiplayedwith$latestInputTime();
-        return Util.getMillis() - latestInput >= AFK_AFTER_MS;
+        return Afk.inactive(latestInput, Util.getMillis());
     }
 
     private void markNearby(LocalPlayer self, Iterable<AbstractClientPlayer> others) {
@@ -201,15 +199,14 @@ public final class PlayerObserver {
     }
 
     /** @return {@code false} when the notice could not be queued and this tick should stop */
-    private boolean remember(ConcurrentHashMap<UUID, Long> seen, UUID uuid, long minute, Notice notice) {
-        Long last = seen.get(uuid);
-        if (last != null && last == minute) {
+    private boolean remember(NotedMinutes seen, UUID uuid, long minute, Notice notice) {
+        if (seen.noted(uuid, minute)) {
             return true;
         }
         if (!sightings.offer(notice)) {
             return false;
         }
-        seen.put(uuid, minute);
+        seen.note(uuid, minute);
         return true;
     }
 
