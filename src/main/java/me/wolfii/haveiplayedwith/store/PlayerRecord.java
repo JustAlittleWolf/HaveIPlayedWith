@@ -76,12 +76,11 @@ final class PlayerRecord {
         addServerMinute(serverId);
     }
 
-    void addAfkMinutes(long minutes) {
-        afkMinutes += minutes;
-    }
-
-    void addNearbyMinutes(long minutes) {
-        nearbyMinutes += minutes;
+    void addActivityMinutes(PlayerActivity activity, long minutes) {
+        switch (activity) {
+            case AFK -> afkMinutes += minutes;
+            case NEARBY -> nearbyMinutes += minutes;
+        }
     }
 
     long minutesForSession(String sessionId) {

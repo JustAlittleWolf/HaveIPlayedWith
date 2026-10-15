@@ -1,6 +1,5 @@
 package me.wolfii.haveiplayedwith.observe;
 
-import com.mojang.authlib.GameProfile;
 import me.wolfii.haveiplayedwith.ModLog;
 import me.wolfii.haveiplayedwith.ModThreads;
 import me.wolfii.haveiplayedwith.chat.RenameMessages;
@@ -9,9 +8,6 @@ import me.wolfii.haveiplayedwith.store.PlayerStore;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.multiplayer.ClientPacketListener;
-import net.minecraft.client.multiplayer.PlayerInfo;
-import net.minecraft.client.player.AbstractClientPlayer;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.network.chat.Component;
 
@@ -33,17 +29,19 @@ import java.util.concurrent.ExecutorService;
  * immediately. Players that still need a profile lookup stay on a bounded queue. Row writes
  * are paced by the store, so a full tab list does not hit the disk at once.
  *
- * <p>{@link AfkObserver} and {@link ProximityObserver} tick on their own and write only their own
- * counters, through {@link MinuteScheduler}. A player can therefore be written up to three times in one minute.
+ * <p>{@link AfkObserver} and {@link NearbyPlayerObserver} tick on their own and write only their own
+ * counters, through {@link ActivityWriteQueue}. A player can therefore be written up to three times in one minute.
  *
  * <p>The client thread only reads game profiles and hands them to {@link #sightings}; every cache
  * read, API call and play-time write happens on one of this class' own threads.
  */
-public final class PlayerObserver extends MinuteObserver {
+public final class PlayerObserver extends PlayerMinuteObserver {
     /** Sightings waiting on a profile lookup, per the 500 entry buffer the API budget allows. */
     private static final int MAX_LOOKUP_BUFFER = 500;
     /** Sightings waiting to be classified as "needs a lookup" or "already known". */
     private static final int MAX_SIGHTING_BUFFER = 2048;
+    private final PlayerStore playerStore;
+    private final ActivityWriteQueue activityWrites = new ActivityWriteQueue();
     private final ProfileApi profiles;
     private final ExecutorService dispatcher = ModThreads.singleWorker("sightings");
     private final ExecutorService lookupWorker = ModThreads.singleWorker("profiles");
@@ -52,17 +50,16 @@ public final class PlayerObserver extends MinuteObserver {
     private final BlockingQueue<UUID> lookups = new ArrayBlockingQueue<>(MAX_LOOKUP_BUFFER);
     private final ConcurrentHashMap<UUID, Long> creditedMinute = new ConcurrentHashMap<>();
     private final AfkObserver afkObserver;
-    private final ProximityObserver proximityObserver;
-    private final TickPass pass = new TickPass();
+    private final NearbyPlayerObserver nearbyPlayerObserver;
     /** One id for this client run, assigned at boot and kept across join/disconnect. */
     private final String sessionId = UUID.randomUUID().toString();
     private volatile String currentServerId;
 
     public PlayerObserver(PlayerStore players, ProfileApi profiles) {
-        super(players, new MinuteScheduler());
+        this.playerStore = players;
         this.profiles = profiles;
-        this.afkObserver = new AfkObserver(players, minutes);
-        this.proximityObserver = new ProximityObserver(players, minutes);
+        this.afkObserver = new AfkObserver(players, activityWrites);
+        this.nearbyPlayerObserver = new NearbyPlayerObserver(players, activityWrites);
         dispatcher.execute(this::dispatchLoop);
         lookupWorker.execute(this::lookupLoop);
     }
@@ -76,7 +73,7 @@ public final class PlayerObserver extends MinuteObserver {
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
             clear();
             afkObserver.clear();
-            proximityObserver.clear();
+            nearbyPlayerObserver.clear();
         });
         ClientTickEvents.END_CLIENT_TICK.register(this::clientTick);
     }
@@ -91,7 +88,7 @@ public final class PlayerObserver extends MinuteObserver {
     public void close() {
         dispatcher.shutdownNow();
         lookupWorker.shutdownNow();
-        minutes.close();
+        activityWrites.close();
     }
 
     private void clientTick(Minecraft client) {
@@ -112,20 +109,11 @@ public final class PlayerObserver extends MinuteObserver {
             return;
         }
         afkObserver.tick(client, epochMinute);
-        proximityObserver.tick(client, epochMinute);
-        pass.reset(epochMinute, serverId);
-        ClientPacketListener connection = client.getConnection();
-        for (PlayerInfo info : connection.getListedOnlinePlayers()) {
-            if (!offer(info.getProfile(), pass)) {
-                return;
-            }
-        }
-        for (AbstractClientPlayer player : client.level.players()) {
-            if (!offer(player.getGameProfile(), pass)) {
-                return;
-            }
-        }
-        offer(client.player.getGameProfile(), pass);
+        nearbyPlayerObserver.tick(client, epochMinute);
+        LocalDate day = LocalDate.now();
+        observeAllPlayers(client, epochMinute, profile -> sightings.offer(
+            new Sighting(profile.id(), profile.name(), day, epochMinute, serverId)
+        ));
     }
 
     private String resolveServerId(Minecraft client) {
@@ -138,15 +126,6 @@ public final class PlayerObserver extends MinuteObserver {
             currentServerId = resolved;
         }
         return resolved;
-    }
-
-    /**
-     * @return {@code false} when the sighting queue is full and this tick should stop offering
-     */
-    private boolean offer(GameProfile profile, TickPass pass) {
-        return offer(profile, pass.epochMinute, uuid -> sightings.offer(
-            new Sighting(uuid, profile.name(), pass.day(), pass.epochMinute, pass.serverId)
-        ));
     }
 
     /**
@@ -202,12 +181,12 @@ public final class PlayerObserver extends MinuteObserver {
     private void credit(Sighting sighting) {
         Long last = creditedMinute.put(sighting.uuid(), sighting.epochMinute());
         if (last != null && last == sighting.epochMinute()) {
-            announceRename(sighting.uuid(), players.applyUsername(sighting.uuid(), sighting.username(), Instant.now()), sighting.username());
+            announceRename(sighting.uuid(), playerStore.applyUsername(sighting.uuid(), sighting.username(), Instant.now()), sighting.username());
             return;
         }
         announceRename(
             sighting.uuid(),
-            players.recordLivePlay(
+            playerStore.recordLivePlay(
                 sighting.uuid(),
                 sighting.username(),
                 sighting.day(),
@@ -232,25 +211,6 @@ public final class PlayerObserver extends MinuteObserver {
             Component message = RenameMessages.playerRenamed(previous, currentName, uuid);
             self.sendSystemMessage(message);
         });
-    }
-
-    private static final class TickPass {
-        private long epochMinute;
-        private String serverId;
-        private LocalDate day;
-
-        private void reset(long epochMinute, String serverId) {
-            this.epochMinute = epochMinute;
-            this.serverId = serverId;
-            this.day = null;
-        }
-
-        private LocalDate day() {
-            if (day == null) {
-                day = LocalDate.now();
-            }
-            return day;
-        }
     }
 
     private record Sighting(UUID uuid, String username, LocalDate day, long epochMinute, String serverId) {

@@ -2,30 +2,28 @@ package me.wolfii.haveiplayedwith.observe;
 
 import me.wolfii.haveiplayedwith.mixin.FramerateLimitTrackerAccessor;
 import me.wolfii.haveiplayedwith.store.PlayerStore;
+import me.wolfii.haveiplayedwith.store.PlayerActivity;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.multiplayer.ClientPacketListener;
-import net.minecraft.client.multiplayer.PlayerInfo;
-import net.minecraft.client.player.AbstractClientPlayer;
 import net.minecraft.util.Util;
 
 /**
  * Counts a minute as AFK when the client has had no input for {@link #AFK_AFTER_MS}.
  * That window belongs to this mod. The write only adds an AFK minute.
  */
-final class AfkObserver extends MinuteObserver {
+final class AfkObserver extends ActivityMinuteObserver {
     static final long AFK_AFTER_MS = 60_000L;
 
-    AfkObserver(PlayerStore players, MinuteScheduler minutes) {
-        super(players, minutes);
+    AfkObserver(PlayerStore players, ActivityWriteQueue activityWrites) {
+        super(players, activityWrites, PlayerActivity.AFK);
     }
 
-    static boolean inactive(long latestInputMillis, long nowMillis) {
+    static boolean isAfk(long latestInputMillis, long nowMillis) {
         return nowMillis - latestInputMillis >= AFK_AFTER_MS;
     }
 
-    static boolean clientAfk(Minecraft client) {
-        long latestInput = ((FramerateLimitTrackerAccessor) client.getFramerateLimitTracker()).haveiplayedwith$latestInputTime();
-        return inactive(latestInput, Util.getMillis());
+    static boolean isClientAfk(Minecraft client) {
+        long latestInputMillis = ((FramerateLimitTrackerAccessor) client.getFramerateLimitTracker()).haveiplayedwith$latestInputTime();
+        return isAfk(latestInputMillis, Util.getMillis());
     }
 
     @Override
@@ -34,20 +32,9 @@ final class AfkObserver extends MinuteObserver {
             return;
         }
         prune(epochMinute);
-        if (!clientAfk(client)) {
+        if (!isClientAfk(client)) {
             return;
         }
-        ClientPacketListener connection = client.getConnection();
-        for (PlayerInfo info : connection.getListedOnlinePlayers()) {
-            if (!offer(info.getProfile(), epochMinute, uuid -> minutes.offer(() -> players.recordAfkMinute(uuid)))) {
-                return;
-            }
-        }
-        for (AbstractClientPlayer player : client.level.players()) {
-            if (!offer(player.getGameProfile(), epochMinute, uuid -> minutes.offer(() -> players.recordAfkMinute(uuid)))) {
-                return;
-            }
-        }
-        offer(client.player.getGameProfile(), epochMinute, uuid -> minutes.offer(() -> players.recordAfkMinute(uuid)));
+        observeAllPlayers(client, epochMinute, profile -> enqueueMinute(profile.id()));
     }
 }

@@ -50,18 +50,19 @@ class PlayerStoreTest {
     void afkAndNearbyMinutesDoNotChangePlayTime() {
         UUID uuid = UUID.randomUUID();
         try (PlayerStore players = open()) {
-            players.recordAfkMinute(uuid);
-            players.recordNearbyMinute(uuid);
+            players.recordActivityMinute(uuid, PlayerActivity.AFK);
+            players.recordActivityMinute(uuid, PlayerActivity.AFK);
+            players.recordActivityMinute(uuid, PlayerActivity.NEARBY);
             players.recordLivePlay(uuid, "Steve", LocalDate.of(2026, 8, 1), "live:one", "hypixel.net");
-            players.recordAfkMinute(uuid);
-            players.recordNearbyMinute(uuid);
+            players.recordActivityMinute(uuid, PlayerActivity.AFK);
+            players.recordActivityMinute(uuid, PlayerActivity.NEARBY);
         }
         try (PlayerStore players = open()) {
             PlayerSnapshot snapshot = players.get(uuid).orElseThrow();
             assertEquals(1, snapshot.totalMinutes());
             assertEquals(1, snapshot.daysPlayed());
             assertEquals(1, snapshot.sessionCount());
-            assertEquals(2, snapshot.afkMinutes());
+            assertEquals(3, snapshot.afkMinutes());
             assertEquals(2, snapshot.nearbyMinutes());
         }
     }

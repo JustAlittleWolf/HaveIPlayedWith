@@ -5,6 +5,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
+import java.util.Objects;
 import java.util.UUID;
 
 /**
@@ -62,14 +63,10 @@ public final class PlayerStore implements AutoCloseable {
         return db.call(() -> db.recordLivePlay(uuid, username, day, sessionId, serverId));
     }
 
-    /** One AFK minute. Does not change play time, days, or sessions. */
-    public void recordAfkMinute(UUID uuid) {
-        db.run(() -> db.recordAfkMinute(uuid));
-    }
-
-    /** One nearby minute. Does not change play time, days, or sessions. */
-    public void recordNearbyMinute(UUID uuid) {
-        db.run(() -> db.recordNearbyMinute(uuid));
+    /** Adds one minute of this activity without changing play time, days, or sessions. */
+    public void recordActivityMinute(UUID uuid, PlayerActivity activity) {
+        Objects.requireNonNull(activity, "activity");
+        db.run(() -> db.recordActivityMinute(uuid, activity));
     }
 
     public Optional<String> applyUsername(UUID uuid, String username, Instant fetchedAt) {

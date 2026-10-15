@@ -10,6 +10,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.EnumMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
@@ -45,10 +46,8 @@ final class StoreDb implements AutoCloseable {
     private MVMap<byte[], byte[]> profiles;
     private MVMap<byte[], byte[]> misses;
     private final Map<UUID, PlayerRecord> live = new HashMap<>();
-    /** AFK minutes that arrived before this player's row existed. */
-    private final Map<UUID, Long> pendingAfk = new HashMap<>();
-    /** Nearby minutes that arrived before this player's row existed. */
-    private final Map<UUID, Long> pendingNearby = new HashMap<>();
+    /** Activity minutes received before a verified player row exists. */
+    private final Map<UUID, Map<PlayerActivity, Long>> pendingActivityMinutes = new HashMap<>();
     /** Player rows waiting to be written, oldest first. */
     private final WriteQueue pendingWrites = new WriteQueue();
     private ScheduledFuture<?> writeTurn;
@@ -134,44 +133,23 @@ final class StoreDb implements AutoCloseable {
         player.setCurrentUsername(username);
         player.touchName(username, Instant.now());
         player.credit(day, sessionId, serverId);
-        applyPending(player, pendingAfk, true);
-        applyPending(player, pendingNearby, false);
+        Map<PlayerActivity, Long> pending = pendingActivityMinutes.remove(uuid);
+        if (pending != null) {
+            pending.forEach(player::addActivityMinutes);
+        }
         save(player);
         return previousName;
     }
 
-    void recordAfkMinute(UUID uuid) {
-        addSeparateMinute(uuid, pendingAfk, true);
-    }
-
-    void recordNearbyMinute(UUID uuid) {
-        addSeparateMinute(uuid, pendingNearby, false);
-    }
-
-    private void addSeparateMinute(UUID uuid, Map<UUID, Long> pending, boolean afk) {
+    void recordActivityMinute(UUID uuid, PlayerActivity activity) {
         if (!hasPlayer(uuid)) {
-            pending.merge(uuid, 1L, Long::sum);
+            pendingActivityMinutes.computeIfAbsent(uuid, ignored -> new EnumMap<>(PlayerActivity.class))
+                .merge(activity, 1L, Long::sum);
             return;
         }
         PlayerRecord player = player(uuid);
-        if (afk) {
-            player.addAfkMinutes(1);
-        } else {
-            player.addNearbyMinutes(1);
-        }
+        player.addActivityMinutes(activity, 1);
         save(player);
-    }
-
-    private void applyPending(PlayerRecord player, Map<UUID, Long> pending, boolean afk) {
-        Long minutes = pending.remove(player.uuid);
-        if (minutes == null || minutes <= 0) {
-            return;
-        }
-        if (afk) {
-            player.addAfkMinutes(minutes);
-        } else {
-            player.addNearbyMinutes(minutes);
-        }
     }
 
     Optional<String> applyUsername(UUID uuid, String username, Instant fetchedAt) {

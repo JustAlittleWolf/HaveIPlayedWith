@@ -1,6 +1,7 @@
 package me.wolfii.haveiplayedwith.observe;
 
 import me.wolfii.haveiplayedwith.store.PlayerStore;
+import me.wolfii.haveiplayedwith.store.PlayerActivity;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.AbstractClientPlayer;
 import net.minecraft.client.player.LocalPlayer;
@@ -8,20 +9,20 @@ import net.minecraft.client.player.LocalPlayer;
 import java.util.UUID;
 
 /**
- * Counts a minute as nearby when another player is within {@link #NEARBY_BLOCKS}
+ * Counts a minute as nearby when another player is within {@link #NEARBY_RADIUS_BLOCKS}
  * blocks, measured as a sphere so height counts. The local player is skipped.
  * The write only adds a nearby minute.
  */
-final class ProximityObserver extends MinuteObserver {
-    static final double NEARBY_BLOCKS = 100.0;
-    private static final double NEARBY_DISTANCE_SQR = NEARBY_BLOCKS * NEARBY_BLOCKS;
+final class NearbyPlayerObserver extends ActivityMinuteObserver {
+    static final double NEARBY_RADIUS_BLOCKS = 100.0;
+    private static final double NEARBY_RADIUS_SQUARED = NEARBY_RADIUS_BLOCKS * NEARBY_RADIUS_BLOCKS;
 
-    ProximityObserver(PlayerStore players, MinuteScheduler minutes) {
-        super(players, minutes);
+    NearbyPlayerObserver(PlayerStore players, ActivityWriteQueue activityWrites) {
+        super(players, activityWrites, PlayerActivity.NEARBY);
     }
 
-    static boolean nearby(double dx, double dy, double dz) {
-        return dx * dx + dy * dy + dz * dz <= NEARBY_DISTANCE_SQR;
+    static boolean isNearby(double dx, double dy, double dz) {
+        return dx * dx + dy * dy + dz * dz <= NEARBY_RADIUS_SQUARED;
     }
 
     @Override
@@ -35,7 +36,7 @@ final class ProximityObserver extends MinuteObserver {
             if (!withinRange(self, other)) {
                 continue;
             }
-            if (!offer(other.getGameProfile(), epochMinute, uuid -> minutes.offer(() -> players.recordNearbyMinute(uuid)))) {
+            if (!offer(other.getGameProfile(), epochMinute, profile -> enqueueMinute(profile.id()))) {
                 return;
             }
         }
@@ -49,6 +50,6 @@ final class ProximityObserver extends MinuteObserver {
         if (uuid == null || uuid.equals(self.getUUID())) {
             return false;
         }
-        return nearby(other.getX() - self.getX(), other.getY() - self.getY(), other.getZ() - self.getZ());
+        return isNearby(other.getX() - self.getX(), other.getY() - self.getY(), other.getZ() - self.getZ());
     }
 }
