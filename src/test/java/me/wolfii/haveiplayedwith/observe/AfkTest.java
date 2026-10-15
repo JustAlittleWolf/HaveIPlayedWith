@@ -9,8 +9,8 @@ class AfkTest {
     @Test
     void sixtySecondsWithoutInputIsAfk() {
         long input = 1_000_000L;
-        assertFalse(Afk.inactive(input, input + Afk.AFK_AFTER_MS - 1));
-        assertTrue(Afk.inactive(input, input + Afk.AFK_AFTER_MS));
-        assertTrue(Afk.inactive(input, input + Afk.AFK_AFTER_MS + 1));
+        assertFalse(AfkObserver.inactive(input, input + AfkObserver.AFK_AFTER_MS - 1));
+        assertTrue(AfkObserver.inactive(input, input + AfkObserver.AFK_AFTER_MS));
+        assertTrue(AfkObserver.inactive(input, input + AfkObserver.AFK_AFTER_MS + 1));
     }
 }

@@ -34,11 +34,11 @@ import java.util.concurrent.ExecutorService;
  * immediately. Players that still need a profile lookup stay on a bounded queue. Row writes
  * are paced by the store, so a full tab list does not hit the disk at once.
  *
- * <p>{@link Afk} and {@link Proximity} queue their own minutes on the same clock. Those writes
- * only increment their own counters. A player can therefore be written up to three times in one minute.
+ * <p>{@link AfkObserver} and {@link ProximityObserver} tick on their own and write only their own
+ * counters, through {@link MinuteScheduler}. A player can therefore be written up to three times in one minute.
  *
  * <p>The client thread only reads game profiles and hands them to {@link #sightings}; every cache
- * read, API call and database write happens on one of this class' own threads.
+ * read, API call and play-time write happens on one of this class' own threads.
  */
 public final class PlayerObserver {
     /** Sightings waiting on a profile lookup, per the 500 entry buffer the API budget allows. */
@@ -50,14 +50,15 @@ public final class PlayerObserver {
     private final ProfileApi profiles;
     private final ExecutorService dispatcher = ModThreads.singleWorker("sightings");
     private final ExecutorService lookupWorker = ModThreads.singleWorker("profiles");
-    private final BlockingQueue<Notice> sightings = new ArrayBlockingQueue<>(MAX_SIGHTING_BUFFER);
+    private final BlockingQueue<Sighting> sightings = new ArrayBlockingQueue<>(MAX_SIGHTING_BUFFER);
     private final ConcurrentHashMap<UUID, Sighting> pendingLookups = new ConcurrentHashMap<>();
     private final BlockingQueue<UUID> lookups = new ArrayBlockingQueue<>(MAX_LOOKUP_BUFFER);
     /** Calendar minute this UUID was last handed to {@link #sightings} for play time. */
     private final NotedMinutes lastNotedMinute = new NotedMinutes();
     private final ConcurrentHashMap<UUID, Long> creditedMinute = new ConcurrentHashMap<>();
-    private final Afk afk = new Afk();
-    private final Proximity proximity = new Proximity();
+    private final MinuteScheduler minutes = new MinuteScheduler();
+    private final AfkObserver afk;
+    private final ProximityObserver proximity;
     private final TickPass pass = new TickPass();
     private volatile long currentMinute = Long.MIN_VALUE;
     /** One id for this client run, assigned at boot and kept across join/disconnect. */
@@ -67,6 +68,8 @@ public final class PlayerObserver {
     public PlayerObserver(PlayerStore players, ProfileApi profiles) {
         this.players = players;
         this.profiles = profiles;
+        this.afk = new AfkObserver(players, minutes);
+        this.proximity = new ProximityObserver(players, minutes);
         dispatcher.execute(this::dispatchLoop);
         lookupWorker.execute(this::lookupLoop);
     }
@@ -91,6 +94,7 @@ public final class PlayerObserver {
     public void close() {
         dispatcher.shutdownNow();
         lookupWorker.shutdownNow();
+        minutes.close();
     }
 
     private void tick(Minecraft client) {
@@ -99,12 +103,12 @@ public final class PlayerObserver {
         }
         long epochMinute = System.currentTimeMillis() / 60_000L;
         pruneIfNewMinute(epochMinute);
-        proximity.markNearby(client.player, client.level.players());
         String serverId = resolveServerId(client);
         if (serverId == null) {
             return;
         }
-        afk.read(client);
+        afk.tick(client, epochMinute);
+        proximity.tick(client, epochMinute);
         pass.reset(epochMinute, serverId);
         ClientPacketListener connection = client.getConnection();
         for (PlayerInfo info : connection.getListedOnlinePlayers()) {
@@ -128,8 +132,6 @@ public final class PlayerObserver {
         long keepAfter = epochMinute - CREDIT_MEMORY_MINUTES;
         lastNotedMinute.pruneBefore(keepAfter);
         creditedMinute.values().removeIf(minute -> minute < keepAfter);
-        afk.pruneBefore(keepAfter);
-        proximity.pruneBefore(keepAfter);
     }
 
     private String resolveServerId(Minecraft client) {
@@ -159,14 +161,8 @@ public final class PlayerObserver {
         if (!MinecraftUsernames.isValid(name)) {
             return true;
         }
-        if (!lastNotedMinute.remember(sightings, uuid, pass.epochMinute,
-            new Sighting(uuid, name, pass.day(), pass.epochMinute, pass.serverId))) {
-            return false;
-        }
-        if (!afk.offer(sightings, uuid, pass.epochMinute)) {
-            return false;
-        }
-        return proximity.offer(sightings, uuid, pass.epochMinute);
+        return lastNotedMinute.remember(sightings, uuid, pass.epochMinute,
+            new Sighting(uuid, name, pass.day(), pass.epochMinute, pass.serverId));
     }
 
     /**
@@ -176,11 +172,7 @@ public final class PlayerObserver {
     private void dispatchLoop() {
         while (!Thread.currentThread().isInterrupted()) {
             try {
-                Notice notice = sightings.take();
-                if (notice.record(players)) {
-                    continue;
-                }
-                Sighting sighting = (Sighting) notice;
+                Sighting sighting = sightings.take();
                 if (profiles.matchesCachedName(sighting.uuid(), sighting.username())) {
                     credit(sighting);
                     continue;
@@ -277,6 +269,6 @@ public final class PlayerObserver {
         }
     }
 
-    private record Sighting(UUID uuid, String username, LocalDate day, long epochMinute, String serverId) implements Notice {
+    private record Sighting(UUID uuid, String username, LocalDate day, long epochMinute, String serverId) {
     }
 }
