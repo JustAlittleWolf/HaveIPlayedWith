@@ -30,6 +30,10 @@ import java.util.concurrent.ExecutorService;
  * quickly. Each UUID is only queued once per calendar minute, stored on that UUID rather
  * than wiped globally, so a minute change does not re-offer everyone at once.
  *
+ * <p>Every newly due player is handed off on the tick it is seen. A cached name is credited
+ * immediately. Players that still need a profile lookup stay on a bounded queue. Row writes
+ * are paced by the store, so a full tab list does not hit the disk at once.
+ *
  * <p>The client thread only reads game profiles and hands them to {@link #sightings}; every cache
  * read, API call and database write happens on one of this class' own threads.
  */
@@ -38,11 +42,6 @@ public final class PlayerObserver {
     private static final int MAX_LOOKUP_BUFFER = 500;
     /** Sightings waiting to be classified as "needs a lookup" or "already known". */
     private static final int MAX_SIGHTING_BUFFER = 2048;
-    /**
-     * New UUIDs accepted per tick. Spreads a busy tab list across ticks instead of dumping
-     * every newly-due player into the queue on the first tick of a minute.
-     */
-    private static final int NEW_SIGHTINGS_PER_TICK = 16;
     private static final long CREDIT_MEMORY_MINUTES = 60;
     private final PlayerStore players;
     private final ProfileApi profiles;
@@ -134,8 +133,7 @@ public final class PlayerObserver {
     }
 
     /**
-     * @return {@code false} when this tick should stop offering, because the per-tick budget
-     *     is spent or the sighting queue is full
+     * @return {@code false} when the sighting queue is full and this tick should stop offering
      */
     private boolean offer(GameProfile profile, TickPass pass) {
         if (profile == null) {
@@ -159,7 +157,7 @@ public final class PlayerObserver {
             lastNotedMinute.remove(uuid, pass.epochMinute);
             return false;
         }
-        return --pass.budget > 0;
+        return true;
     }
 
     /**
@@ -244,13 +242,11 @@ public final class PlayerObserver {
     private static final class TickPass {
         private long epochMinute;
         private String serverId;
-        private int budget;
         private LocalDate day;
 
         private void reset(long epochMinute, String serverId) {
             this.epochMinute = epochMinute;
             this.serverId = serverId;
-            this.budget = NEW_SIGHTINGS_PER_TICK;
             this.day = null;
         }
 

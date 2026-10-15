@@ -6,14 +6,15 @@ import org.h2.mvstore.MVStore;
 
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ExecutorService;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
 /**
  * Serializes every store read and write onto one thread.
  */
 final class StoreWorker implements AutoCloseable {
-    private final ExecutorService worker = ModThreads.singleWorker("db");
+    private final ScheduledExecutorService worker = ModThreads.singleScheduledWorker("db");
     private MVStore store;
 
     void use(MVStore store) {
@@ -44,6 +45,16 @@ final class StoreWorker implements AutoCloseable {
             task.run();
             return null;
         });
+    }
+
+    ScheduledFuture<?> schedule(StoreWork task, long delayMs) {
+        return worker.schedule(() -> {
+            try {
+                task.run();
+            } catch (Exception e) {
+                ModLog.LOGGER.warn("HaveIPlayedWith database task failed", e);
+            }
+        }, delayMs, TimeUnit.MILLISECONDS);
     }
 
     void close(StoreWork shutdown) {
