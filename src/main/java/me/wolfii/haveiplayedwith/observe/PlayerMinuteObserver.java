@@ -37,6 +37,11 @@ abstract class PlayerMinuteObserver {
         offer(self, epochMinute, enqueue);
     }
 
+    /** Rolls back collection when a batch could not be handed to the worker. */
+    final void forgetQueuedMinute(UUID uuid, long epochMinute) {
+        queuedMinutes.forget(uuid, epochMinute);
+    }
+
     void clear() {
         queuedMinutes.clear();
         currentMinute = Long.MIN_VALUE;

@@ -10,9 +10,8 @@ import java.util.UUID;
 
 /**
  * Player store backed by a compact MVStore file. Reads and writes run on the
- * database thread. A player change is visible immediately; the row write is
- * queued and drained a few at a time. Closing the store writes anything still
- * queued. H2 auto-commit flushes and auto-compacts in the background.
+ * database thread. Each change is written to the map immediately; H2 auto-commit
+ * flushes and auto-compacts in the background.
  */
 public final class PlayerStore implements AutoCloseable {
     private final StoreDb db;

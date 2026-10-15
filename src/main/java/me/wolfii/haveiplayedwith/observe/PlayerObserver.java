@@ -13,6 +13,8 @@ import net.minecraft.network.chat.Component;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ArrayBlockingQueue;
@@ -25,9 +27,9 @@ import java.util.concurrent.ExecutorService;
  * quickly. Each UUID is only queued once per calendar minute, stored on that UUID rather
  * than wiped globally, so a minute change does not re-offer everyone at once.
  *
- * <p>Every newly due player is handed off on the tick it is seen. A cached name is credited
- * immediately. Players that still need a profile lookup stay on a bounded queue. Row writes
- * are paced by the store, so a full tab list does not hit the disk at once.
+ * <p>Every newly due player in a tick is collected and handed off together. A cached name is
+ * credited on the sightings thread. Players that still need a profile lookup stay on a bounded
+ * queue. The database thread writes each row as the credit happens.
  *
  * <p>{@link AfkObserver} and {@link NearbyPlayerObserver} tick on their own and write only their own
  * counters, through {@link ActivityWriteQueue}. A player can therefore be written up to three times in one minute.
@@ -38,14 +40,14 @@ import java.util.concurrent.ExecutorService;
 public final class PlayerObserver extends PlayerMinuteObserver {
     /** Sightings waiting on a profile lookup, per the 500 entry buffer the API budget allows. */
     private static final int MAX_LOOKUP_BUFFER = 500;
-    /** Sightings waiting to be classified as "needs a lookup" or "already known". */
-    private static final int MAX_SIGHTING_BUFFER = 2048;
+    /** Ticks whose new sightings are still waiting to be classified. */
+    private static final int MAX_SIGHTING_BATCHES = 8;
     private final PlayerStore playerStore;
     private final ActivityWriteQueue activityWrites = new ActivityWriteQueue();
     private final ProfileApi profiles;
     private final ExecutorService dispatcher = ModThreads.singleWorker("sightings");
     private final ExecutorService lookupWorker = ModThreads.singleWorker("profiles");
-    private final BlockingQueue<Sighting> sightings = new ArrayBlockingQueue<>(MAX_SIGHTING_BUFFER);
+    private final BlockingQueue<List<Sighting>> sightings = new ArrayBlockingQueue<>(MAX_SIGHTING_BATCHES);
     private final ConcurrentHashMap<UUID, Sighting> pendingLookups = new ConcurrentHashMap<>();
     private final BlockingQueue<UUID> lookups = new ArrayBlockingQueue<>(MAX_LOOKUP_BUFFER);
     private final ConcurrentHashMap<UUID, Long> creditedMinute = new ConcurrentHashMap<>();
@@ -111,9 +113,16 @@ public final class PlayerObserver extends PlayerMinuteObserver {
         afkObserver.tick(client, epochMinute);
         nearbyPlayerObserver.tick(client, epochMinute);
         LocalDate day = LocalDate.now();
-        observeAllPlayers(client, epochMinute, profile -> sightings.offer(
-            new Sighting(profile.id(), profile.name(), day, epochMinute, serverId)
-        ));
+        List<Sighting> batch = new ArrayList<>();
+        observeAllPlayers(client, epochMinute, profile -> {
+            batch.add(new Sighting(profile.id(), profile.name(), day, epochMinute, serverId));
+            return true;
+        });
+        if (!batch.isEmpty() && !sightings.offer(List.copyOf(batch))) {
+            for (Sighting sighting : batch) {
+                forgetQueuedMinute(sighting.uuid(), epochMinute);
+            }
+        }
     }
 
     private String resolveServerId(Minecraft client) {
@@ -135,17 +144,18 @@ public final class PlayerObserver extends PlayerMinuteObserver {
     private void dispatchLoop() {
         while (!Thread.currentThread().isInterrupted()) {
             try {
-                Sighting sighting = sightings.take();
-                if (profiles.matchesCachedName(sighting.uuid(), sighting.username())) {
-                    credit(sighting);
-                    continue;
-                }
-                if (!profiles.needsFetch(sighting.uuid(), sighting.username())) {
-                    continue;
-                }
-                Sighting previous = pendingLookups.put(sighting.uuid(), sighting);
-                if (previous == null && !lookups.offer(sighting.uuid())) {
-                    pendingLookups.remove(sighting.uuid(), sighting);
+                for (Sighting sighting : sightings.take()) {
+                    if (profiles.matchesCachedName(sighting.uuid(), sighting.username())) {
+                        credit(sighting);
+                        continue;
+                    }
+                    if (!profiles.needsFetch(sighting.uuid(), sighting.username())) {
+                        continue;
+                    }
+                    Sighting previous = pendingLookups.put(sighting.uuid(), sighting);
+                    if (previous == null && !lookups.offer(sighting.uuid())) {
+                        pendingLookups.remove(sighting.uuid(), sighting);
+                    }
                 }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();

@@ -57,6 +57,18 @@ class PlayerMinuteObserverTest {
         assertEquals(4, queued.get());
     }
 
+    @Test
+    void aRejectedBatchCanBeCollectedAgainWithoutForgettingOtherMinutes() {
+        PlayerMinuteObserver observer = observer();
+        GameProfile profile = new GameProfile(UUID.randomUUID(), "Steve");
+        assertTrue(observer.offer(profile, 10, ignored -> true));
+        observer.forgetQueuedMinute(profile.id(), 10);
+        assertFalse(observer.offer(profile, 10, ignored -> false));
+        assertTrue(observer.offer(profile, 11, ignored -> true));
+        observer.forgetQueuedMinute(profile.id(), 10);
+        assertTrue(observer.offer(profile, 11, ignored -> false));
+    }
+
     private static PlayerMinuteObserver observer() {
         return new PlayerMinuteObserver() {
             @Override

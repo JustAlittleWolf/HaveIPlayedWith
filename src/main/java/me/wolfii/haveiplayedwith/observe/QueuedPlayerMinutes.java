@@ -19,6 +19,10 @@ final class QueuedPlayerMinutes {
         minutes.put(uuid, minute);
     }
 
+    void forget(UUID uuid, long minute) {
+        minutes.remove(uuid, minute);
+    }
+
     void pruneBefore(long minute) {
         minutes.values().removeIf(seen -> seen < minute);
     }

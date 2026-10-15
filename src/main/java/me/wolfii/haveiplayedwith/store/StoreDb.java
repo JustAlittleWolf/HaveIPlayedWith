@@ -19,23 +19,12 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.Callable;
-import java.util.concurrent.ScheduledFuture;
 
 /**
- * Player and profile rows in one MVStore file. A player change is visible
- * immediately and its row write is queued. Queued rows are written a few at a
- * time so a tab-list burst does not hit the file at once. {@link #close()}
- * writes anything still queued. H2 auto-commit then flushes and auto-compacts
- * in the background.
+ * Player and profile rows in one MVStore file. Each mutation is written to the
+ * map immediately; H2 auto-commit flushes and auto-compacts in the background.
  */
 final class StoreDb implements AutoCloseable {
-    /** Player rows written on each paced turn. */
-    static final int WRITES_PER_TURN = 10;
-    /**
-     * Pause between write turns. A full {@link WriteQueue} therefore takes about
-     * five seconds to reach the map ({@code 500 * 100ms / 10}).
-     */
-    static final int WRITE_TURN_MS = 100;
     private static final MVMap.Builder<byte[], byte[]> BYTES = new MVMap.Builder<byte[], byte[]>()
         .keyType(ByteArrayDataType.INSTANCE)
         .valueType(ByteArrayDataType.INSTANCE);
@@ -48,10 +37,6 @@ final class StoreDb implements AutoCloseable {
     private final Map<UUID, PlayerRecord> live = new HashMap<>();
     /** Activity minutes received before a verified player row exists. */
     private final Map<UUID, Map<PlayerActivity, Long>> pendingActivityMinutes = new HashMap<>();
-    /** Player rows waiting to be written, oldest first. */
-    private final WriteQueue pendingWrites = new WriteQueue();
-    private ScheduledFuture<?> writeTurn;
-    private boolean acceptingWrites = true;
 
     private StoreDb(StoreWorker worker, MVStore store) {
         this.worker = worker;
@@ -86,23 +71,10 @@ final class StoreDb implements AutoCloseable {
     @Override
     public void close() {
         worker.close(() -> {
-            try {
-                flushPendingWrites();
-            } finally {
-                if (store != null && !store.isClosed()) {
-                    store.close();
-                }
+            if (store != null && !store.isClosed()) {
+                store.close();
             }
         });
-    }
-
-    int pendingPlayerWrites() {
-        return pendingWrites.size();
-    }
-
-    /** True when the map already holds this player, ignoring a newer row still queued. */
-    boolean playerRowStored(UUID uuid) {
-        return players.containsKey(StoreCodec.uuidBytes(uuid));
     }
 
     boolean hasPlayer(UUID uuid) {
@@ -250,60 +222,10 @@ final class StoreDb implements AutoCloseable {
 
     private void save(PlayerRecord player) {
         live.put(player.uuid, player);
-        if (!acceptingWrites) {
-            writePlayer(player.uuid);
-            return;
-        }
-        pendingWrites.add(player.uuid).ifPresent(this::writePlayer);
-        scheduleWriteTurn();
-    }
-
-    private void scheduleWriteTurn() {
-        if (!acceptingWrites || pendingWrites.size() == 0) {
-            return;
-        }
-        if (writeTurn != null && !writeTurn.isDone()) {
-            return;
-        }
-        writeTurn = worker.schedule(this::flushWriteTurn, WRITE_TURN_MS);
-    }
-
-    private void flushWriteTurn() {
-        writeTurn = null;
-        if (!acceptingWrites) {
-            return;
-        }
-        for (int i = 0; i < WRITES_PER_TURN; i++) {
-            Optional<UUID> next = pendingWrites.poll();
-            if (next.isEmpty()) {
-                return;
-            }
-            writePlayer(next.get());
-        }
-        scheduleWriteTurn();
-    }
-
-    /** Writes every queued row. Saves after this write straight through, so close cannot drop one. */
-    private void flushPendingWrites() {
-        acceptingWrites = false;
-        if (writeTurn != null) {
-            writeTurn.cancel(false);
-            writeTurn = null;
-        }
-        for (UUID uuid : pendingWrites.drain()) {
-            writePlayer(uuid);
-        }
-    }
-
-    private void writePlayer(UUID uuid) {
-        PlayerRecord player = live.get(uuid);
-        if (player == null) {
-            return;
-        }
         try {
-            players.put(StoreCodec.uuidBytes(uuid), StoreCodec.encodePlayer(player));
+            players.put(StoreCodec.uuidBytes(player.uuid), StoreCodec.encodePlayer(player));
         } catch (RuntimeException e) {
-            ModLog.LOGGER.warn("Failed to encode HaveIPlayedWith player {}", uuid, e);
+            ModLog.LOGGER.warn("Failed to encode HaveIPlayedWith player {}", player.uuid, e);
         }
     }
 
