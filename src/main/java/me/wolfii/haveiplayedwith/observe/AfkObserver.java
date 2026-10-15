@@ -2,19 +2,24 @@ package me.wolfii.haveiplayedwith.observe;
 
 import me.wolfii.haveiplayedwith.mixin.FramerateLimitTrackerAccessor;
 import me.wolfii.haveiplayedwith.store.PlayerStore;
-import me.wolfii.haveiplayedwith.store.PlayerActivity;
 import net.minecraft.client.Minecraft;
+
+import java.util.function.Predicate;
 import net.minecraft.util.Util;
 
 /**
  * Counts a minute as AFK when the client has had no input for {@link #AFK_AFTER_MS}.
  * That window belongs to this mod. The write only adds an AFK minute.
  */
-final class AfkObserver extends ActivityMinuteObserver {
+final class AfkObserver extends PlayerMinuteObserver {
     static final long AFK_AFTER_MS = 60_000L;
 
-    AfkObserver(PlayerStore players, ActivityWriteQueue activityWrites) {
-        super(players, activityWrites, PlayerActivity.AFK);
+    private final PlayerStore playerStore;
+    private final Predicate<Runnable> enqueueWrite;
+
+    AfkObserver(PlayerStore playerStore, Predicate<Runnable> enqueueWrite) {
+        this.playerStore = playerStore;
+        this.enqueueWrite = enqueueWrite;
     }
 
     static boolean isAfk(long latestInputMillis, long nowMillis) {
@@ -27,14 +32,11 @@ final class AfkObserver extends ActivityMinuteObserver {
     }
 
     @Override
-    void tick(Minecraft client, long epochMinute) {
-        if (client.level == null || client.player == null || client.getConnection() == null) {
-            return;
-        }
+    void tick(Minecraft client, long epochMinute, String serverId) {
         prune(epochMinute);
         if (!isClientAfk(client)) {
             return;
         }
-        observeAllPlayers(client, epochMinute, profile -> enqueueMinute(profile.id()));
+        observeAllPlayers(client, epochMinute, profile -> enqueueWrite.test(() -> playerStore.recordAfkMinute(profile.id())));
     }
 }

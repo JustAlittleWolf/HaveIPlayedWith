@@ -10,7 +10,6 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.EnumMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
@@ -36,7 +35,8 @@ final class StoreDb implements AutoCloseable {
     private MVMap<byte[], byte[]> misses;
     private final Map<UUID, PlayerRecord> live = new HashMap<>();
     /** Activity minutes received before a verified player row exists. */
-    private final Map<UUID, Map<PlayerActivity, Long>> pendingActivityMinutes = new HashMap<>();
+    private final Map<UUID, Long> pendingAfkMinutes = new HashMap<>();
+    private final Map<UUID, Long> pendingNearbyMinutes = new HashMap<>();
 
     private StoreDb(StoreWorker worker, MVStore store) {
         this.worker = worker;
@@ -105,22 +105,31 @@ final class StoreDb implements AutoCloseable {
         player.setCurrentUsername(username);
         player.touchName(username, Instant.now());
         player.credit(day, sessionId, serverId);
-        Map<PlayerActivity, Long> pending = pendingActivityMinutes.remove(uuid);
-        if (pending != null) {
-            pending.forEach(player::addActivityMinutes);
-        }
+        player.addAfkMinutes(pendingAfkMinutes.getOrDefault(uuid, 0L));
+        player.addNearbyMinutes(pendingNearbyMinutes.getOrDefault(uuid, 0L));
+        pendingAfkMinutes.remove(uuid);
+        pendingNearbyMinutes.remove(uuid);
         save(player);
         return previousName;
     }
 
-    void recordActivityMinute(UUID uuid, PlayerActivity activity) {
+    void recordAfkMinute(UUID uuid) {
         if (!hasPlayer(uuid)) {
-            pendingActivityMinutes.computeIfAbsent(uuid, ignored -> new EnumMap<>(PlayerActivity.class))
-                .merge(activity, 1L, Long::sum);
+            pendingAfkMinutes.merge(uuid, 1L, Long::sum);
             return;
         }
         PlayerRecord player = player(uuid);
-        player.addActivityMinutes(activity, 1);
+        player.addAfkMinutes(1);
+        save(player);
+    }
+
+    void recordNearbyMinute(UUID uuid) {
+        if (!hasPlayer(uuid)) {
+            pendingNearbyMinutes.merge(uuid, 1L, Long::sum);
+            return;
+        }
+        PlayerRecord player = player(uuid);
+        player.addNearbyMinutes(1);
         save(player);
     }
 

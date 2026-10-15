@@ -7,6 +7,8 @@ import net.minecraft.client.multiplayer.PlayerInfo;
 import net.minecraft.client.player.AbstractClientPlayer;
 
 import java.util.UUID;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.function.Predicate;
 
 /**
@@ -16,10 +18,10 @@ import java.util.function.Predicate;
 abstract class PlayerMinuteObserver {
     static final long MEMORY_MINUTES = 60;
 
-    private final QueuedPlayerMinutes queuedMinutes = new QueuedPlayerMinutes();
+    private final Map<UUID, Long> queuedMinutes = new HashMap<>();
     private long currentMinute = Long.MIN_VALUE;
 
-    abstract void tick(Minecraft client, long epochMinute);
+    abstract void tick(Minecraft client, long epochMinute, String serverId);
 
     /** Shares the tab-list, loaded-player, and local-player traversal for play and AFK. */
     final void observeAllPlayers(Minecraft client, long epochMinute, Predicate<GameProfile> enqueue) {
@@ -39,7 +41,7 @@ abstract class PlayerMinuteObserver {
 
     /** Rolls back collection when a batch could not be handed to the worker. */
     final void forgetQueuedMinute(UUID uuid, long epochMinute) {
-        queuedMinutes.forget(uuid, epochMinute);
+        queuedMinutes.remove(uuid, epochMinute);
     }
 
     void clear() {
@@ -53,7 +55,7 @@ abstract class PlayerMinuteObserver {
             return false;
         }
         currentMinute = epochMinute;
-        queuedMinutes.pruneBefore(epochMinute - MEMORY_MINUTES);
+        queuedMinutes.values().removeIf(minute -> minute < epochMinute - MEMORY_MINUTES);
         return true;
     }
 
@@ -68,13 +70,13 @@ abstract class PlayerMinuteObserver {
         if (uuid == null || !MinecraftUsernames.isValid(profile.name())) {
             return true;
         }
-        if (queuedMinutes.wasQueued(uuid, epochMinute)) {
+        if (queuedMinutes.getOrDefault(uuid, Long.MIN_VALUE) == epochMinute) {
             return true;
         }
         if (!enqueue.test(profile)) {
             return false;
         }
-        queuedMinutes.markQueued(uuid, epochMinute);
+        queuedMinutes.put(uuid, epochMinute);
         return true;
     }
 }

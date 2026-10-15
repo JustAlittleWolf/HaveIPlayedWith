@@ -3,7 +3,7 @@ package me.wolfii.haveiplayedwith.command;
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import me.wolfii.haveiplayedwith.ModThreads;
-import me.wolfii.haveiplayedwith.observe.PlayerObserver;
+import me.wolfii.haveiplayedwith.observe.TickHandler;
 import me.wolfii.haveiplayedwith.profile.ProfileApi;
 import me.wolfii.haveiplayedwith.store.PlayerStore;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
@@ -16,9 +16,9 @@ public final class HaveIPlayedWithCommands {
     private final PlayerLookup lookup;
     private final PlayerNotes notes;
 
-    public HaveIPlayedWithCommands(PlayerStore players, ProfileApi profiles, PlayerObserver observer) {
+    public HaveIPlayedWithCommands(PlayerStore players, ProfileApi profiles, TickHandler tickHandler) {
         ExecutorService worker = ModThreads.singleWorker("commands");
-        this.lookup = new PlayerLookup(players, profiles, worker, observer::liveSessionId);
+        this.lookup = new PlayerLookup(players, profiles, worker, tickHandler::liveSessionId);
         this.notes = new PlayerNotes(players, profiles, worker);
     }
 

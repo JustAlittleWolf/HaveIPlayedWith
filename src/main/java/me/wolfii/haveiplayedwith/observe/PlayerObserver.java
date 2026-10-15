@@ -1,12 +1,9 @@
 package me.wolfii.haveiplayedwith.observe;
 
 import me.wolfii.haveiplayedwith.ModLog;
-import me.wolfii.haveiplayedwith.ModThreads;
 import me.wolfii.haveiplayedwith.chat.RenameMessages;
 import me.wolfii.haveiplayedwith.profile.ProfileApi;
 import me.wolfii.haveiplayedwith.store.PlayerStore;
-import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
-import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.network.chat.Component;
@@ -20,98 +17,39 @@ import java.util.UUID;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutorService;
 
-/**
- * Watches the tab list and loaded players every tick so joins and name changes are noticed
- * quickly. Each UUID is only queued once per calendar minute, stored on that UUID rather
- * than wiped globally, so a minute change does not re-offer everyone at once.
- *
- * <p>Every newly due player in a tick is collected and handed off together. A cached name is
- * credited on the sightings thread. Players that still need a profile lookup stay on a bounded
- * queue. The database thread writes each row as the credit happens.
- *
- * <p>{@link AfkObserver} and {@link NearbyPlayerObserver} tick on their own and write only their own
- * counters, through {@link ActivityWriteQueue}. A player can therefore be written up to three times in one minute.
- *
- * <p>The client thread only reads game profiles and hands them to {@link #sightings}; every cache
- * read, API call and play-time write happens on one of this class' own threads.
- */
-public final class PlayerObserver extends PlayerMinuteObserver {
+/** Collects play sightings and processes cached names and profile lookups off the client thread. */
+final class PlayerObserver extends PlayerMinuteObserver {
     /** Sightings waiting on a profile lookup, per the 500 entry buffer the API budget allows. */
     private static final int MAX_LOOKUP_BUFFER = 500;
     /** Ticks whose new sightings are still waiting to be classified. */
     private static final int MAX_SIGHTING_BATCHES = 8;
     private final PlayerStore playerStore;
-    private final ActivityWriteQueue activityWrites = new ActivityWriteQueue();
     private final ProfileApi profiles;
-    private final ExecutorService dispatcher = ModThreads.singleWorker("sightings");
-    private final ExecutorService lookupWorker = ModThreads.singleWorker("profiles");
     private final BlockingQueue<List<Sighting>> sightings = new ArrayBlockingQueue<>(MAX_SIGHTING_BATCHES);
     private final ConcurrentHashMap<UUID, Sighting> pendingLookups = new ConcurrentHashMap<>();
     private final BlockingQueue<UUID> lookups = new ArrayBlockingQueue<>(MAX_LOOKUP_BUFFER);
     private final ConcurrentHashMap<UUID, Long> creditedMinute = new ConcurrentHashMap<>();
-    private final AfkObserver afkObserver;
-    private final NearbyPlayerObserver nearbyPlayerObserver;
-    /** One id for this client run, assigned at boot and kept across join/disconnect. */
-    private final String sessionId = UUID.randomUUID().toString();
-    private volatile String currentServerId;
+    private final String sessionId;
 
-    public PlayerObserver(PlayerStore players, ProfileApi profiles) {
+    PlayerObserver(PlayerStore players, ProfileApi profiles, String sessionId) {
         this.playerStore = players;
         this.profiles = profiles;
-        this.afkObserver = new AfkObserver(players, activityWrites);
-        this.nearbyPlayerObserver = new NearbyPlayerObserver(players, activityWrites);
-        dispatcher.execute(this::dispatchLoop);
-        lookupWorker.execute(this::lookupLoop);
-    }
-
-    public String liveSessionId() {
-        return "live:" + sessionId;
-    }
-
-    public void register() {
-        ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> currentServerId = ServerId.current(client));
-        ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
-            clear();
-            afkObserver.clear();
-            nearbyPlayerObserver.clear();
-        });
-        ClientTickEvents.END_CLIENT_TICK.register(this::clientTick);
+        this.sessionId = sessionId;
     }
 
     @Override
     void clear() {
         super.clear();
         creditedMinute.clear();
-        currentServerId = null;
-    }
-
-    public void close() {
-        dispatcher.shutdownNow();
-        lookupWorker.shutdownNow();
-        activityWrites.close();
-    }
-
-    private void clientTick(Minecraft client) {
-        tick(client, System.currentTimeMillis() / 60_000L);
     }
 
     @Override
-    void tick(Minecraft client, long epochMinute) {
-        if (client.level == null || client.player == null || client.getConnection() == null) {
-            return;
-        }
+    void tick(Minecraft client, long epochMinute, String serverId) {
         if (prune(epochMinute)) {
             long keepAfter = epochMinute - MEMORY_MINUTES;
             creditedMinute.values().removeIf(minute -> minute < keepAfter);
         }
-        String serverId = resolveServerId(client);
-        if (serverId == null) {
-            return;
-        }
-        afkObserver.tick(client, epochMinute);
-        nearbyPlayerObserver.tick(client, epochMinute);
         LocalDate day = LocalDate.now();
         List<Sighting> batch = new ArrayList<>();
         observeAllPlayers(client, epochMinute, profile -> {
@@ -125,23 +63,11 @@ public final class PlayerObserver extends PlayerMinuteObserver {
         }
     }
 
-    private String resolveServerId(Minecraft client) {
-        String current = currentServerId;
-        if (current != null) {
-            return current;
-        }
-        String resolved = ServerId.current(client);
-        if (resolved != null) {
-            currentServerId = resolved;
-        }
-        return resolved;
-    }
-
     /**
      * Decides off the client thread whether a sighting can be credited from cache or needs the API.
      * A cached UUID↔name match is credited with no request, even when that cache row is old.
      */
-    private void dispatchLoop() {
+    void dispatchLoop() {
         while (!Thread.currentThread().isInterrupted()) {
             try {
                 for (Sighting sighting : sightings.take()) {
@@ -166,7 +92,7 @@ public final class PlayerObserver extends PlayerMinuteObserver {
         }
     }
 
-    private void lookupLoop() {
+    void lookupLoop() {
         while (!Thread.currentThread().isInterrupted()) {
             try {
                 UUID uuid = lookups.take();
@@ -200,7 +126,7 @@ public final class PlayerObserver extends PlayerMinuteObserver {
                 sighting.uuid(),
                 sighting.username(),
                 sighting.day(),
-                liveSessionId(),
+                sessionId,
                 sighting.serverId()
             ),
             sighting.username()

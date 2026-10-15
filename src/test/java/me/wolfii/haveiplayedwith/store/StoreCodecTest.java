@@ -116,8 +116,8 @@ class StoreCodecTest {
         player.credit(LocalDate.of(2026, 8, 1), "live:one", "hypixel.net");
         player.credit(LocalDate.of(2026, 8, 1), "live:one", "hypixel.net");
         player.credit(LocalDate.of(2026, 8, 2), "live:two", "world/Survival");
-        player.addActivityMinutes(PlayerActivity.AFK, 2);
-        player.addActivityMinutes(PlayerActivity.NEARBY, 2);
+        player.addAfkMinutes(2);
+        player.addNearbyMinutes(2);
 
         PlayerRecord copy = StoreCodec.decodePlayer(uuid, StoreCodec.encodePlayer(player));
         assertEquals(3, copy.totalMinutes);
@@ -137,8 +137,8 @@ class StoreCodecTest {
         player.touchName("Steve", Instant.parse("2026-08-01T00:00:00Z"));
         player.credit(LocalDate.of(2026, 8, 1), "live:one", "hypixel.net");
         player.credit(LocalDate.of(2026, 8, 2), "live:two", "world/Survival");
-        player.addActivityMinutes(PlayerActivity.AFK, 1);
-        player.addActivityMinutes(PlayerActivity.NEARBY, 2);
+        player.addAfkMinutes(1);
+        player.addNearbyMinutes(2);
 
         byte[] current = StoreCodec.encodePlayer(player);
         byte[] versionTwo = Arrays.copyOf(current, current.length - 8);

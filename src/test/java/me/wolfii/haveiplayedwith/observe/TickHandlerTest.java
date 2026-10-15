@@ -9,15 +9,15 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-class ActivityWriteQueueTest {
+class TickHandlerTest {
     @Test
     void closeDrainsAcceptedWritesAndRejectsNewOnes() throws Exception {
-        ActivityWriteQueue queue = new ActivityWriteQueue();
+        TickHandler queue = new TickHandler(null, null);
         CountDownLatch started = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
         AtomicInteger completed = new AtomicInteger();
         try {
-            assertTrue(queue.offer(() -> {
+            assertTrue(queue.offerActivityWrite(() -> {
                 started.countDown();
                 try {
                     release.await();
@@ -26,11 +26,11 @@ class ActivityWriteQueueTest {
                 }
             }));
             assertTrue(started.await(5, TimeUnit.SECONDS));
-            assertTrue(queue.offer(completed::incrementAndGet));
+            assertTrue(queue.offerActivityWrite(completed::incrementAndGet));
             CompletableFuture.delayedExecutor(50, TimeUnit.MILLISECONDS).execute(release::countDown);
             queue.close();
             assertEquals(1, completed.get());
-            assertFalse(queue.offer(completed::incrementAndGet));
+            assertFalse(queue.offerActivityWrite(completed::incrementAndGet));
         } finally {
             release.countDown();
             queue.close();
@@ -39,10 +39,10 @@ class ActivityWriteQueueTest {
 
     @Test
     void aFailedWriteDoesNotStopLaterWrites() {
-        ActivityWriteQueue queue = new ActivityWriteQueue();
+        TickHandler queue = new TickHandler(null, null);
         AtomicInteger completed = new AtomicInteger();
-        assertTrue(queue.offer(() -> { throw new IllegalStateException("test failure"); }));
-        assertTrue(queue.offer(completed::incrementAndGet));
+        assertTrue(queue.offerActivityWrite(() -> { throw new IllegalStateException("test failure"); }));
+        assertTrue(queue.offerActivityWrite(completed::incrementAndGet));
         queue.close();
         assertEquals(1, completed.get());
     }

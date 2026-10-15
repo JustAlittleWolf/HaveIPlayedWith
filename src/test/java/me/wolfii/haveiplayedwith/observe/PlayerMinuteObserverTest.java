@@ -15,7 +15,7 @@ class PlayerMinuteObserverTest {
     void aRefusedWriteLeavesThePlayerUnnoted() {
         PlayerMinuteObserver observer = new PlayerMinuteObserver() {
             @Override
-            void tick(Minecraft client, long epochMinute) {
+            void tick(Minecraft client, long epochMinute, String serverId) {
             }
         };
         UUID uuid = UUID.randomUUID();
@@ -29,7 +29,7 @@ class PlayerMinuteObserverTest {
     void pruneRunsOncePerMinute() {
         PlayerMinuteObserver observer = new PlayerMinuteObserver() {
             @Override
-            void tick(Minecraft client, long epochMinute) {
+            void tick(Minecraft client, long epochMinute, String serverId) {
             }
         };
         assertTrue(observer.prune(10));
@@ -69,10 +69,25 @@ class PlayerMinuteObserverTest {
         assertTrue(observer.offer(profile, 11, ignored -> false));
     }
 
+    @Test
+    void pruneDropsOldPlayersAndClearAllowsTheSameMinuteAgain() {
+        PlayerMinuteObserver observer = observer();
+        GameProfile old = new GameProfile(UUID.randomUUID(), "Steve");
+        GameProfile kept = new GameProfile(UUID.randomUUID(), "Alex");
+        assertTrue(observer.offer(old, 39, ignored -> true));
+        assertTrue(observer.offer(kept, 40, ignored -> true));
+        observer.prune(100);
+        assertFalse(observer.offer(old, 39, ignored -> false));
+        assertTrue(observer.offer(kept, 40, ignored -> false));
+        observer.clear();
+        assertFalse(observer.offer(kept, 40, ignored -> false));
+        assertTrue(observer.prune(100));
+    }
+
     private static PlayerMinuteObserver observer() {
         return new PlayerMinuteObserver() {
             @Override
-            void tick(Minecraft client, long epochMinute) {
+            void tick(Minecraft client, long epochMinute, String serverId) {
             }
         };
     }
