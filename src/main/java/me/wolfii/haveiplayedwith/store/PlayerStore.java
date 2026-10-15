@@ -56,27 +56,20 @@ public final class PlayerStore implements AutoCloseable {
      * @return the last name this player was seen as, when the new username is different
      */
     public Optional<String> recordLivePlay(UUID uuid, String username, LocalDate day, String sessionId, String serverId) {
-        return recordLivePlay(uuid, username, day, sessionId, serverId, false, false);
-    }
-
-    /**
-     * @param clientAfk this client was past Minecraft's AFK input threshold when the minute was recorded
-     * @param nearby this player was within 100 blocks when the minute was recorded
-     * @return the last name this player was seen as, when the new username is different
-     */
-    public Optional<String> recordLivePlay(
-        UUID uuid,
-        String username,
-        LocalDate day,
-        String sessionId,
-        String serverId,
-        boolean clientAfk,
-        boolean nearby
-    ) {
         if (serverId == null || serverId.isBlank()) {
             throw new IllegalArgumentException("serverId");
         }
-        return db.call(() -> db.recordLivePlay(uuid, username, day, sessionId, serverId, clientAfk, nearby));
+        return db.call(() -> db.recordLivePlay(uuid, username, day, sessionId, serverId));
+    }
+
+    /** One AFK minute. Does not change play time, days, or sessions. */
+    public void recordAfkMinute(UUID uuid) {
+        db.run(() -> db.recordAfkMinute(uuid));
+    }
+
+    /** One nearby minute. Does not change play time, days, or sessions. */
+    public void recordNearbyMinute(UUID uuid) {
+        db.run(() -> db.recordNearbyMinute(uuid));
     }
 
     public Optional<String> applyUsername(UUID uuid, String username, Instant fetchedAt) {

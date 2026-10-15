@@ -45,6 +45,10 @@ final class StoreDb implements AutoCloseable {
     private MVMap<byte[], byte[]> profiles;
     private MVMap<byte[], byte[]> misses;
     private final Map<UUID, PlayerRecord> live = new HashMap<>();
+    /** AFK minutes that arrived before this player's row existed. */
+    private final Map<UUID, Long> pendingAfk = new HashMap<>();
+    /** Nearby minutes that arrived before this player's row existed. */
+    private final Map<UUID, Long> pendingNearby = new HashMap<>();
     /** Player rows waiting to be written, oldest first. */
     private final WriteQueue pendingWrites = new WriteQueue();
     private ScheduledFuture<?> writeTurn;
@@ -122,18 +126,6 @@ final class StoreDb implements AutoCloseable {
     }
 
     Optional<String> recordLivePlay(UUID uuid, String username, LocalDate day, String sessionId, String serverId) {
-        return recordLivePlay(uuid, username, day, sessionId, serverId, false, false);
-    }
-
-    Optional<String> recordLivePlay(
-        UUID uuid,
-        String username,
-        LocalDate day,
-        String sessionId,
-        String serverId,
-        boolean clientAfk,
-        boolean nearby
-    ) {
         if (serverId == null || serverId.isBlank()) {
             throw new IllegalArgumentException("serverId");
         }
@@ -141,9 +133,45 @@ final class StoreDb implements AutoCloseable {
         Optional<String> previousName = player.previousNameIfDifferent(username);
         player.setCurrentUsername(username);
         player.touchName(username, Instant.now());
-        player.credit(day, sessionId, serverId, clientAfk, nearby);
+        player.credit(day, sessionId, serverId);
+        applyPending(player, pendingAfk, true);
+        applyPending(player, pendingNearby, false);
         save(player);
         return previousName;
+    }
+
+    void recordAfkMinute(UUID uuid) {
+        addSeparateMinute(uuid, pendingAfk, true);
+    }
+
+    void recordNearbyMinute(UUID uuid) {
+        addSeparateMinute(uuid, pendingNearby, false);
+    }
+
+    private void addSeparateMinute(UUID uuid, Map<UUID, Long> pending, boolean afk) {
+        if (!hasPlayer(uuid)) {
+            pending.merge(uuid, 1L, Long::sum);
+            return;
+        }
+        PlayerRecord player = player(uuid);
+        if (afk) {
+            player.addAfkMinutes(1);
+        } else {
+            player.addNearbyMinutes(1);
+        }
+        save(player);
+    }
+
+    private void applyPending(PlayerRecord player, Map<UUID, Long> pending, boolean afk) {
+        Long minutes = pending.remove(player.uuid);
+        if (minutes == null || minutes <= 0) {
+            return;
+        }
+        if (afk) {
+            player.addAfkMinutes(minutes);
+        } else {
+            player.addNearbyMinutes(minutes);
+        }
     }
 
     Optional<String> applyUsername(UUID uuid, String username, Instant fetchedAt) {

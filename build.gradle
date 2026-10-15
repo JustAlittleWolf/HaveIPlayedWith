@@ -2,10 +2,6 @@ plugins {
     id 'net.fabricmc.fabric-loom' version "${loom_version}"
 }
 
-loom {
-    accessWidenerPath = file("src/main/resources/haveiplayedwith.accesswidener")
-}
-
 version = project.version
 group = project.maven_group
 

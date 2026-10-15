@@ -17,9 +17,9 @@ public record PlayerSnapshot(
     Optional<LocalDate> lastPlayedBeforeToday,
     List<SeenName> names,
     Optional<ServerPlay> mostPlayedServer,
-    /** Minutes of {@link #totalMinutes} while this client was AFK. */
+    /** Minutes this client was AFK while this player was seen. Not part of {@link #totalMinutes}. */
     long afkMinutes,
-    /** Minutes of {@link #totalMinutes} while this player was within 100 blocks. */
+    /** Minutes this player was within 100 blocks. Not part of {@link #totalMinutes}. */
     long nearbyMinutes
 ) {
     /** Extra minutes required beyond the current session so live logging cannot look like prior play. */

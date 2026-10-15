@@ -113,9 +113,11 @@ class StoreCodecTest {
         PlayerRecord player = new PlayerRecord(uuid);
         player.setCurrentUsername("Steve");
         player.setNote("afk at spawn", Instant.parse("2026-08-01T00:00:00Z").toEpochMilli());
-        player.credit(LocalDate.of(2026, 8, 1), "live:one", "hypixel.net", true, false);
-        player.credit(LocalDate.of(2026, 8, 1), "live:one", "hypixel.net", true, true);
-        player.credit(LocalDate.of(2026, 8, 2), "live:two", "world/Survival", false, true);
+        player.credit(LocalDate.of(2026, 8, 1), "live:one", "hypixel.net");
+        player.credit(LocalDate.of(2026, 8, 1), "live:one", "hypixel.net");
+        player.credit(LocalDate.of(2026, 8, 2), "live:two", "world/Survival");
+        player.addAfkMinutes(2);
+        player.addNearbyMinutes(2);
 
         PlayerRecord copy = StoreCodec.decodePlayer(uuid, StoreCodec.encodePlayer(player));
         assertEquals(3, copy.totalMinutes);
@@ -133,8 +135,10 @@ class StoreCodecTest {
         player.setCurrentUsername("Steve");
         player.setNote("builds farms", Instant.parse("2026-08-01T00:00:00Z").toEpochMilli());
         player.touchName("Steve", Instant.parse("2026-08-01T00:00:00Z"));
-        player.credit(LocalDate.of(2026, 8, 1), "live:one", "hypixel.net", true, true);
-        player.credit(LocalDate.of(2026, 8, 2), "live:two", "world/Survival", false, true);
+        player.credit(LocalDate.of(2026, 8, 1), "live:one", "hypixel.net");
+        player.credit(LocalDate.of(2026, 8, 2), "live:two", "world/Survival");
+        player.addAfkMinutes(1);
+        player.addNearbyMinutes(2);
 
         byte[] current = StoreCodec.encodePlayer(player);
         byte[] versionTwo = Arrays.copyOf(current, current.length - 8);
