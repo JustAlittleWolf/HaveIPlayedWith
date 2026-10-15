@@ -13,6 +13,9 @@
   "license": "MIT",
   "icon": "assets/haveiplayedwith/icon.png",
   "environment": "client",
+  "mixins": [
+    "haveiplayedwith.mixins.json"
+  ],
   "entrypoints": {
     "client": [
       "me.wolfii.haveiplayedwith.HaveIPlayedWith"

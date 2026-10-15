@@ -1,263 +1,33 @@
 package me.wolfii.haveiplayedwith.observe;
 
-import com.mojang.authlib.GameProfile;
-import me.wolfii.haveiplayedwith.MinecraftUsernames;
-import me.wolfii.haveiplayedwith.ModLog;
-import me.wolfii.haveiplayedwith.ModThreads;
-import me.wolfii.haveiplayedwith.chat.RenameMessages;
-import me.wolfii.haveiplayedwith.profile.ProfileApi;
-import me.wolfii.haveiplayedwith.store.PlayerStore;
-import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
-import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.multiplayer.ClientPacketListener;
-import net.minecraft.client.multiplayer.PlayerInfo;
-import net.minecraft.client.player.AbstractClientPlayer;
-import net.minecraft.client.player.LocalPlayer;
-import net.minecraft.network.chat.Component;
 
-import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
-import java.util.UUID;
-import java.util.concurrent.ArrayBlockingQueue;
-import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutorService;
+import java.util.function.Predicate;
 
-/**
- * Watches the tab list and nearby players every tick so joins and name changes are noticed
- * quickly. Each UUID is only queued once per calendar minute, stored on that UUID rather
- * than wiped globally, so a minute change does not re-offer everyone at once.
- *
- * <p>Every newly due player in a tick is collected and handed off together. A cached name is
- * credited on the sightings thread. Players that still need a profile lookup stay on a bounded
- * queue. The database thread writes each row as the credit happens.
- *
- * <p>The client thread only reads game profiles and hands them to {@link #sightings}; every cache
- * read, API call and database write happens on one of this class' own threads.
- */
-public final class PlayerObserver {
-    /** Sightings waiting on a profile lookup, per the 500 entry buffer the API budget allows. */
-    private static final int MAX_LOOKUP_BUFFER = 500;
-    /** Ticks whose new sightings are still waiting to be classified. */
-    private static final int MAX_SIGHTING_BATCHES = 8;
-    private static final long CREDIT_MEMORY_MINUTES = 60;
-    private final PlayerStore players;
-    private final ProfileApi profiles;
-    private final ExecutorService dispatcher = ModThreads.singleWorker("sightings");
-    private final ExecutorService lookupWorker = ModThreads.singleWorker("profiles");
-    private final BlockingQueue<List<Sighting>> sightings = new ArrayBlockingQueue<>(MAX_SIGHTING_BATCHES);
-    private final ConcurrentHashMap<UUID, Sighting> pendingLookups = new ConcurrentHashMap<>();
-    private final BlockingQueue<UUID> lookups = new ArrayBlockingQueue<>(MAX_LOOKUP_BUFFER);
-    private final ConcurrentHashMap<UUID, Long> creditedMinute = new ConcurrentHashMap<>();
-    /** Calendar minute this UUID was last handed to {@link #sightings}. */
-    private final ConcurrentHashMap<UUID, Long> lastNotedMinute = new ConcurrentHashMap<>();
-    private final TickPass pass = new TickPass();
-    private volatile long currentMinute = Long.MIN_VALUE;
-    /** One id for this client run, assigned at boot and kept across join/disconnect. */
-    private final String sessionId = UUID.randomUUID().toString();
-    private volatile String currentServerId;
-    public PlayerObserver(PlayerStore players, ProfileApi profiles) {
-        this.players = players;
-        this.profiles = profiles;
-        dispatcher.execute(this::dispatchLoop);
-        lookupWorker.execute(this::lookupLoop);
+/** Collects newly due play sightings and submits one batch per tick. */
+final class PlayerObserver extends PlayerMinuteObserver {
+    private final Predicate<List<ObservationManager.Sighting>> enqueueSightings;
+
+    PlayerObserver(Predicate<List<ObservationManager.Sighting>> enqueueSightings) {
+        this.enqueueSightings = enqueueSightings;
     }
 
-    public String liveSessionId() {
-        return "live:" + sessionId;
-    }
-
-    public void register() {
-        ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> currentServerId = ServerId.current(client));
-        ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
-            currentServerId = null;
-            creditedMinute.clear();
-            lastNotedMinute.clear();
-            currentMinute = Long.MIN_VALUE;
+    @Override
+    void tick(Minecraft client, long epochMinute, String serverId) {
+        prune(epochMinute);
+        LocalDate day = LocalDate.now();
+        List<ObservationManager.Sighting> batch = new ArrayList<>();
+        observeAllPlayers(client, epochMinute, profile -> {
+            batch.add(new ObservationManager.Sighting(profile.id(), profile.name(), day, epochMinute, serverId));
+            return true;
         });
-        ClientTickEvents.END_CLIENT_TICK.register(this::tick);
-    }
-
-    public void close() {
-        dispatcher.shutdownNow();
-        lookupWorker.shutdownNow();
-    }
-
-    private void tick(Minecraft client) {
-        if (client.level == null || client.player == null || client.getConnection() == null) {
-            return;
-        }
-        long epochMinute = System.currentTimeMillis() / 60_000L;
-        pruneIfNewMinute(epochMinute);
-        String serverId = resolveServerId(client);
-        if (serverId == null) {
-            return;
-        }
-        pass.reset(epochMinute, serverId);
-        List<Sighting> batch = new ArrayList<>();
-        ClientPacketListener connection = client.getConnection();
-        for (PlayerInfo info : connection.getListedOnlinePlayers()) {
-            collect(info.getProfile(), pass, batch);
-        }
-        for (AbstractClientPlayer player : client.level.players()) {
-            collect(player.getGameProfile(), pass, batch);
-        }
-        collect(client.player.getGameProfile(), pass, batch);
-        if (batch.isEmpty()) {
-            return;
-        }
-        if (!sightings.offer(List.copyOf(batch))) {
-            for (Sighting sighting : batch) {
-                lastNotedMinute.remove(sighting.uuid(), pass.epochMinute);
+        if (!batch.isEmpty() && !enqueueSightings.test(batch)) {
+            for (ObservationManager.Sighting sighting : batch) {
+                forgetQueuedMinute(sighting.uuid(), epochMinute);
             }
         }
-    }
-
-    private void pruneIfNewMinute(long epochMinute) {
-        if (epochMinute == currentMinute) {
-            return;
-        }
-        currentMinute = epochMinute;
-        long keepAfter = epochMinute - CREDIT_MEMORY_MINUTES;
-        lastNotedMinute.values().removeIf(minute -> minute < keepAfter);
-        creditedMinute.values().removeIf(minute -> minute < keepAfter);
-    }
-
-    private String resolveServerId(Minecraft client) {
-        String current = currentServerId;
-        if (current != null) {
-            return current;
-        }
-        String resolved = ServerId.current(client);
-        if (resolved != null) {
-            currentServerId = resolved;
-        }
-        return resolved;
-    }
-
-    private void collect(GameProfile profile, TickPass pass, List<Sighting> batch) {
-        if (profile == null) {
-            return;
-        }
-        UUID uuid = profile.id();
-        if (uuid == null) {
-            return;
-        }
-        Long lastNoted = lastNotedMinute.get(uuid);
-        if (lastNoted != null && lastNoted == pass.epochMinute) {
-            return;
-        }
-        String name = profile.name();
-        if (!MinecraftUsernames.isValid(name)) {
-            return;
-        }
-        lastNotedMinute.put(uuid, pass.epochMinute);
-        batch.add(new Sighting(uuid, name, pass.day(), pass.epochMinute, pass.serverId));
-    }
-
-    /**
-     * Decides off the client thread whether a sighting can be credited from cache or needs the API.
-     * A cached UUID↔name match is credited with no request, even when that cache row is old.
-     */
-    private void dispatchLoop() {
-        while (!Thread.currentThread().isInterrupted()) {
-            try {
-                for (Sighting sighting : sightings.take()) {
-                    if (profiles.matchesCachedName(sighting.uuid(), sighting.username())) {
-                        credit(sighting);
-                        continue;
-                    }
-                    if (!profiles.needsFetch(sighting.uuid(), sighting.username())) {
-                        continue;
-                    }
-                    Sighting previous = pendingLookups.put(sighting.uuid(), sighting);
-                    if (previous == null && !lookups.offer(sighting.uuid())) {
-                        pendingLookups.remove(sighting.uuid(), sighting);
-                    }
-                }
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                return;
-            } catch (RuntimeException e) {
-                ModLog.LOGGER.debug("Player observation failed", e);
-            }
-        }
-    }
-
-    private void lookupLoop() {
-        while (!Thread.currentThread().isInterrupted()) {
-            try {
-                UUID uuid = lookups.take();
-                Sighting sighting = pendingLookups.remove(uuid);
-                if (sighting == null) {
-                    continue;
-                }
-                var profile = profiles.lookupUuid(uuid);
-                if (profile.isEmpty() || !profile.get().username().equalsIgnoreCase(sighting.username())) {
-                    continue;
-                }
-                credit(new Sighting(uuid, profile.get().username(), sighting.day(), sighting.epochMinute(), sighting.serverId()));
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                return;
-            } catch (RuntimeException e) {
-                ModLog.LOGGER.debug("Profile verification failed", e);
-            }
-        }
-    }
-
-    private void credit(Sighting sighting) {
-        Long last = creditedMinute.put(sighting.uuid(), sighting.epochMinute());
-        if (last != null && last == sighting.epochMinute()) {
-            announceRename(sighting.uuid(), players.applyUsername(sighting.uuid(), sighting.username(), Instant.now()), sighting.username());
-            return;
-        }
-        announceRename(
-            sighting.uuid(),
-            players.recordLivePlay(sighting.uuid(), sighting.username(), sighting.day(), liveSessionId(), sighting.serverId()),
-            sighting.username()
-        );
-    }
-
-    private void announceRename(UUID uuid, Optional<String> previousName, String currentName) {
-        if (previousName.isEmpty()) {
-            return;
-        }
-        String previous = previousName.get();
-        Minecraft client = Minecraft.getInstance();
-        client.execute(() -> {
-            LocalPlayer self = client.player;
-            if (self == null || uuid.equals(self.getUUID())) {
-                return;
-            }
-            Component message = RenameMessages.playerRenamed(previous, currentName, uuid);
-            self.sendSystemMessage(message);
-        });
-    }
-
-    private static final class TickPass {
-        private long epochMinute;
-        private String serverId;
-        private LocalDate day;
-
-        private void reset(long epochMinute, String serverId) {
-            this.epochMinute = epochMinute;
-            this.serverId = serverId;
-            this.day = null;
-        }
-
-        private LocalDate day() {
-            if (day == null) {
-                day = LocalDate.now();
-            }
-            return day;
-        }
-    }
-
-    private record Sighting(UUID uuid, String username, LocalDate day, long epochMinute, String serverId) {
     }
 }

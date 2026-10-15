@@ -1,7 +1,7 @@
 package me.wolfii.haveiplayedwith;
 
 import me.wolfii.haveiplayedwith.command.HaveIPlayedWithCommands;
-import me.wolfii.haveiplayedwith.observe.PlayerObserver;
+import me.wolfii.haveiplayedwith.observe.ObservationManager;
 import me.wolfii.haveiplayedwith.profile.ProfileApi;
 import me.wolfii.haveiplayedwith.store.PlayerStore;
 import net.fabricmc.api.ClientModInitializer;
@@ -11,16 +11,16 @@ public class HaveIPlayedWith implements ClientModInitializer {
     public static final String MOD_ID = "haveiplayedwith";
 
     private PlayerStore players;
-    private PlayerObserver observer;
+    private ObservationManager observationManager;
 
     @Override
     public void onInitializeClient() {
         try {
             players = new PlayerStore(ModPaths.databaseFile());
             ProfileApi profiles = new ProfileApi(players.profiles());
-            observer = new PlayerObserver(players, profiles);
-            observer.register();
-            new HaveIPlayedWithCommands(players, profiles, observer).register();
+            observationManager = new ObservationManager(players, profiles);
+            observationManager.register();
+            new HaveIPlayedWithCommands(players, profiles, observationManager).register();
             ClientLifecycleEvents.CLIENT_STOPPING.register(client -> close());
             ModLog.LOGGER.info("Have I Played With initialized ({})", ModPaths.databaseFile());
         } catch (Exception e) {
@@ -29,8 +29,8 @@ public class HaveIPlayedWith implements ClientModInitializer {
     }
 
     private void close() {
-        if (observer != null) {
-            observer.close();
+        if (observationManager != null) {
+            observationManager.close();
         }
         if (players != null) {
             players.close();

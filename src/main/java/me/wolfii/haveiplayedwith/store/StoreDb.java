@@ -34,6 +34,9 @@ final class StoreDb implements AutoCloseable {
     private MVMap<byte[], byte[]> profiles;
     private MVMap<byte[], byte[]> misses;
     private final Map<UUID, PlayerRecord> live = new HashMap<>();
+    /** Activity minutes received before a verified player row exists. */
+    private final Map<UUID, Long> pendingAfkMinutes = new HashMap<>();
+    private final Map<UUID, Long> pendingNearbyMinutes = new HashMap<>();
 
     private StoreDb(StoreWorker worker, MVStore store) {
         this.worker = worker;
@@ -102,8 +105,32 @@ final class StoreDb implements AutoCloseable {
         player.setCurrentUsername(username);
         player.touchName(username, Instant.now());
         player.credit(day, sessionId, serverId);
+        player.addAfkMinutes(pendingAfkMinutes.getOrDefault(uuid, 0L));
+        player.addNearbyMinutes(pendingNearbyMinutes.getOrDefault(uuid, 0L));
+        pendingAfkMinutes.remove(uuid);
+        pendingNearbyMinutes.remove(uuid);
         save(player);
         return previousName;
+    }
+
+    void recordAfkMinute(UUID uuid) {
+        if (!hasPlayer(uuid)) {
+            pendingAfkMinutes.merge(uuid, 1L, Long::sum);
+            return;
+        }
+        PlayerRecord player = player(uuid);
+        player.addAfkMinutes(1);
+        save(player);
+    }
+
+    void recordNearbyMinute(UUID uuid) {
+        if (!hasPlayer(uuid)) {
+            pendingNearbyMinutes.merge(uuid, 1L, Long::sum);
+            return;
+        }
+        PlayerRecord player = player(uuid);
+        player.addNearbyMinutes(1);
+        save(player);
     }
 
     Optional<String> applyUsername(UUID uuid, String username, Instant fetchedAt) {

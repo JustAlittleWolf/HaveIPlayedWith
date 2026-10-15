@@ -22,6 +22,10 @@ final class PlayerRecord {
     String note = "";
     long noteTakenAt;
     long totalMinutes;
+    /** Minutes the client was AFK while this player was seen. Separate from {@link #totalMinutes}. */
+    long afkMinutes;
+    /** Minutes this player was within 100 blocks. Separate from {@link #totalMinutes}. */
+    long nearbyMinutes;
     int sessionCount;
     int daysPlayed;
     final List<Integer> recentDays = new ArrayList<>();
@@ -72,6 +76,14 @@ final class PlayerRecord {
         addServerMinute(serverId);
     }
 
+    void addAfkMinutes(long minutes) {
+        afkMinutes += minutes;
+    }
+
+    void addNearbyMinutes(long minutes) {
+        nearbyMinutes += minutes;
+    }
+
     long minutesForSession(String sessionId) {
         for (Session session : sessions) {
             if (session.id.equals(sessionId)) {
@@ -108,7 +120,9 @@ final class PlayerRecord {
             daysPlayed,
             lastPlayedBeforeToday(),
             List.copyOf(names),
-            mostPlayedServer()
+            mostPlayedServer(),
+            afkMinutes,
+            nearbyMinutes
         );
     }
 

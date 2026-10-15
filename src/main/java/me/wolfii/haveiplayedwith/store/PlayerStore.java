@@ -61,6 +61,16 @@ public final class PlayerStore implements AutoCloseable {
         return db.call(() -> db.recordLivePlay(uuid, username, day, sessionId, serverId));
     }
 
+    /** Adds one AFK minute without changing play time, days, or sessions. */
+    public void recordAfkMinute(UUID uuid) {
+        db.run(() -> db.recordAfkMinute(uuid));
+    }
+
+    /** Adds one nearby minute without changing play time, days, or sessions. */
+    public void recordNearbyMinute(UUID uuid) {
+        db.run(() -> db.recordNearbyMinute(uuid));
+    }
+
     public Optional<String> applyUsername(UUID uuid, String username, Instant fetchedAt) {
         return db.call(() -> db.applyUsername(uuid, username, fetchedAt));
     }

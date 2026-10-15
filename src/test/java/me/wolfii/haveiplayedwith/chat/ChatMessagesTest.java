@@ -113,7 +113,9 @@ class ChatMessagesTest {
             2,
             Optional.of(LocalDate.of(2026, 8, 1)),
             List.of(new SeenName("Steve", Instant.parse("2026-08-01T12:00:00Z")), new SeenName("Alex", Instant.parse("2026-08-02T12:00:00Z"))),
-            Optional.of(new ServerPlay("hypixel.net", 60))
+            Optional.of(new ServerPlay("hypixel.net", 60)),
+            0L,
+            0L
         );
     }
 

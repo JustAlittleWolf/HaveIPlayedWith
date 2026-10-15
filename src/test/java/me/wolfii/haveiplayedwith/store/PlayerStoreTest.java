@@ -41,6 +41,29 @@ class PlayerStoreTest {
             assertTrue(snapshot.pastNames().stream().anyMatch(name -> name.username().equals("Steve")));
             assertEquals("hypixel.net", snapshot.mostPlayedServer().orElseThrow().serverId());
             assertEquals(2, snapshot.mostPlayedServer().orElseThrow().minutes());
+            assertEquals(0, snapshot.afkMinutes());
+            assertEquals(0, snapshot.nearbyMinutes());
+        }
+    }
+
+    @Test
+    void afkAndNearbyMinutesDoNotChangePlayTime() {
+        UUID uuid = UUID.randomUUID();
+        try (PlayerStore players = open()) {
+            players.recordAfkMinute(uuid);
+            players.recordAfkMinute(uuid);
+            players.recordNearbyMinute(uuid);
+            players.recordLivePlay(uuid, "Steve", LocalDate.of(2026, 8, 1), "live:one", "hypixel.net");
+            players.recordAfkMinute(uuid);
+            players.recordNearbyMinute(uuid);
+        }
+        try (PlayerStore players = open()) {
+            PlayerSnapshot snapshot = players.get(uuid).orElseThrow();
+            assertEquals(1, snapshot.totalMinutes());
+            assertEquals(1, snapshot.daysPlayed());
+            assertEquals(1, snapshot.sessionCount());
+            assertEquals(3, snapshot.afkMinutes());
+            assertEquals(2, snapshot.nearbyMinutes());
         }
     }
 
