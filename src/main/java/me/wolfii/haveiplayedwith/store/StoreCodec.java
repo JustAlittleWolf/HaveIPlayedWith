@@ -4,6 +4,7 @@ import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.util.Arrays;
 import java.util.Map;
 import java.util.UUID;
 import java.util.function.UnaryOperator;
@@ -17,12 +18,13 @@ import java.util.function.UnaryOperator;
  * {@code version + 1}. Missing updaters mean the payload is unchanged.
  */
 final class StoreCodec {
-    static final int VERSION = 2;
+    static final int VERSION = 3;
     private static final String NAME_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_";
     private static final int UTF_FLAG = 0x80;
     /** Payload rewrites keyed by the version they consume. Omit a version when the layout is unchanged. */
     private static final Map<Integer, UnaryOperator<byte[]>> PLAYER_UPDATES = Map.of(
-        1, StoreCodec::updatePlayer1
+        1, StoreCodec::updatePlayer1,
+        2, StoreCodec::updatePlayer2
     );
     private static final Map<Integer, UnaryOperator<byte[]>> PROFILE_UPDATES = Map.of();
 
@@ -73,6 +75,8 @@ final class StoreCodec {
             writeName(out, name.username());
             writeLong(out, name.lastSeen().toEpochMilli());
         }
+        writeUnsignedInt(out, player.afkMinutes);
+        writeUnsignedInt(out, player.nearbyMinutes);
         return out.toByteArray();
     }
 
@@ -108,6 +112,8 @@ final class StoreCodec {
         for (int i = 0; i < nameCount; i++) {
             player.names.add(new SeenName(readName(in), Instant.ofEpochMilli(in.getLong())));
         }
+        player.afkMinutes = readUnsignedInt(in);
+        player.nearbyMinutes = readUnsignedInt(in);
         return player;
     }
 
@@ -199,6 +205,11 @@ final class StoreCodec {
         in.get(rest);
         out.writeBytes(rest);
         return out.toByteArray();
+    }
+
+    /** v2 rows end after seen names. AFK and nearby minutes start at zero. */
+    private static byte[] updatePlayer2(byte[] bytes) {
+        return Arrays.copyOf(bytes, bytes.length + 8);
     }
 
     private static void writeName(ByteArrayOutputStream out, String name) {

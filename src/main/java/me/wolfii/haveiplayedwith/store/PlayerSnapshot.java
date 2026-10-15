@@ -16,7 +16,11 @@ public record PlayerSnapshot(
     int daysPlayed,
     Optional<LocalDate> lastPlayedBeforeToday,
     List<SeenName> names,
-    Optional<ServerPlay> mostPlayedServer
+    Optional<ServerPlay> mostPlayedServer,
+    /** Minutes of {@link #totalMinutes} while this client was AFK. */
+    long afkMinutes,
+    /** Minutes of {@link #totalMinutes} while this player was within 100 blocks. */
+    long nearbyMinutes
 ) {
     /** Extra minutes required beyond the current session so live logging cannot look like prior play. */
     public static final int CURRENT_SESSION_BUFFER_MINUTES = 5;

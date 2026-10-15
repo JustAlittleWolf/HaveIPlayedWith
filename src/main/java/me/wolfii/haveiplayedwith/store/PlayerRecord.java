@@ -22,6 +22,10 @@ final class PlayerRecord {
     String note = "";
     long noteTakenAt;
     long totalMinutes;
+    /** Subset of {@link #totalMinutes} credited while the client was AFK. */
+    long afkMinutes;
+    /** Subset of {@link #totalMinutes} credited while this player was within 100 blocks. */
+    long nearbyMinutes;
     int sessionCount;
     int daysPlayed;
     final List<Integer> recentDays = new ArrayList<>();
@@ -61,6 +65,10 @@ final class PlayerRecord {
     }
 
     void credit(LocalDate day, String sessionId, String serverId) {
+        credit(day, sessionId, serverId, false, false);
+    }
+
+    void credit(LocalDate day, String sessionId, String serverId, boolean clientAfk, boolean nearby) {
         addSessionMinute(sessionId);
         int epochDay = Math.toIntExact(day.toEpochDay());
         if (!recentDays.contains(epochDay)) {
@@ -69,7 +77,17 @@ final class PlayerRecord {
             recentDays.sort(null);
         }
         totalMinutes++;
+        if (clientAfk) {
+            afkMinutes++;
+        }
+        if (nearby) {
+            nearbyMinutes++;
+        }
         addServerMinute(serverId);
+    }
+
+    void addNearbyMinutes(long minutes) {
+        nearbyMinutes += minutes;
     }
 
     long minutesForSession(String sessionId) {
@@ -108,7 +126,9 @@ final class PlayerRecord {
             daysPlayed,
             lastPlayedBeforeToday(),
             List.copyOf(names),
-            mostPlayedServer()
+            mostPlayedServer(),
+            afkMinutes,
+            nearbyMinutes
         );
     }
 

@@ -4,9 +4,11 @@ import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -48,6 +50,8 @@ class StoreCodecTest {
         assertEquals(2, copy.daysPlayed);
         assertEquals("Steve", copy.names.get(1).username());
         assertEquals("hypixel.net", copy.snapshot().mostPlayedServer().orElseThrow().serverId());
+        assertEquals(0, copy.afkMinutes);
+        assertEquals(0, copy.nearbyMinutes);
         assertEquals(List.of(
             (int) LocalDate.of(2026, 8, 1).toEpochDay(),
             (int) LocalDate.of(2026, 8, 2).toEpochDay()
@@ -99,6 +103,57 @@ class StoreCodecTest {
         assertTrue(player.sessions.isEmpty());
         assertTrue(player.servers.isEmpty());
         assertTrue(player.names.isEmpty());
+        assertEquals(0, player.afkMinutes);
+        assertEquals(0, player.nearbyMinutes);
+    }
+
+    @Test
+    void afkAndNearbyMinutesRoundTrip() {
+        UUID uuid = UUID.fromString("61699b2e-d327-4a01-9f1e-0ea8c3f06bc6");
+        PlayerRecord player = new PlayerRecord(uuid);
+        player.setCurrentUsername("Steve");
+        player.setNote("afk at spawn", Instant.parse("2026-08-01T00:00:00Z").toEpochMilli());
+        player.credit(LocalDate.of(2026, 8, 1), "live:one", "hypixel.net", true, false);
+        player.credit(LocalDate.of(2026, 8, 1), "live:one", "hypixel.net", true, true);
+        player.credit(LocalDate.of(2026, 8, 2), "live:two", "world/Survival", false, true);
+
+        PlayerRecord copy = StoreCodec.decodePlayer(uuid, StoreCodec.encodePlayer(player));
+        assertEquals(3, copy.totalMinutes);
+        assertEquals(2, copy.afkMinutes);
+        assertEquals(2, copy.nearbyMinutes);
+        assertEquals("afk at spawn", copy.note);
+        assertEquals(2, copy.snapshot().afkMinutes());
+        assertEquals(2, copy.snapshot().nearbyMinutes());
+    }
+
+    @Test
+    void readsVersionTwoPlayerRowsWithoutAfkOrNearbyMinutes() {
+        UUID uuid = UUID.fromString("61699b2e-d327-4a01-9f1e-0ea8c3f06bc6");
+        PlayerRecord player = new PlayerRecord(uuid);
+        player.setCurrentUsername("Steve");
+        player.setNote("builds farms", Instant.parse("2026-08-01T00:00:00Z").toEpochMilli());
+        player.touchName("Steve", Instant.parse("2026-08-01T00:00:00Z"));
+        player.credit(LocalDate.of(2026, 8, 1), "live:one", "hypixel.net", true, true);
+        player.credit(LocalDate.of(2026, 8, 2), "live:two", "world/Survival", false, true);
+
+        byte[] current = StoreCodec.encodePlayer(player);
+        byte[] versionTwo = Arrays.copyOf(current, current.length - 8);
+        versionTwo[0] = 2;
+
+        PlayerRecord restored = StoreCodec.decodePlayer(uuid, versionTwo);
+        assertEquals("Steve", restored.username);
+        assertEquals("builds farms", restored.note);
+        assertEquals(2, restored.totalMinutes);
+        assertEquals(0, restored.afkMinutes);
+        assertEquals(0, restored.nearbyMinutes);
+        assertEquals(2, restored.daysPlayed);
+        assertEquals("hypixel.net", restored.snapshot().mostPlayedServer().orElseThrow().serverId());
+
+        byte[] rewritten = StoreCodec.encodePlayer(restored);
+        byte[] expected = current.clone();
+        expected[0] = 3;
+        Arrays.fill(expected, expected.length - 8, expected.length, (byte) 0);
+        assertArrayEquals(expected, rewritten);
     }
 
     @Test
@@ -110,6 +165,9 @@ class StoreCodecTest {
         byte[] versionOne = current.clone();
         versionOne[0] = 1;
         ProfileMapping mapping = StoreCodec.decodeProfile(uuid, versionOne);
+        byte[] versionTwo = current.clone();
+        versionTwo[0] = 2;
+        assertEquals("Steve", StoreCodec.decodeProfile(uuid, versionTwo).username());
         assertEquals(uuid, mapping.uuid());
         assertEquals("Steve", mapping.username());
         assertEquals(lastValid, mapping.lastValid());

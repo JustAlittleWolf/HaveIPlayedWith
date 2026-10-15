@@ -41,6 +41,57 @@ class PlayerStoreTest {
             assertTrue(snapshot.pastNames().stream().anyMatch(name -> name.username().equals("Steve")));
             assertEquals("hypixel.net", snapshot.mostPlayedServer().orElseThrow().serverId());
             assertEquals(2, snapshot.mostPlayedServer().orElseThrow().minutes());
+            assertEquals(0, snapshot.afkMinutes());
+            assertEquals(0, snapshot.nearbyMinutes());
+        }
+    }
+
+    @Test
+    void tracksAfkAndNearbyMinutesSeparately() {
+        UUID uuid = UUID.randomUUID();
+        try (PlayerStore players = open()) {
+            players.recordLivePlay(uuid, "Steve", LocalDate.of(2026, 8, 1), "live:one", "hypixel.net", true, false);
+            players.recordLivePlay(uuid, "Steve", LocalDate.of(2026, 8, 1), "live:one", "hypixel.net", true, true);
+            players.recordLivePlay(uuid, "Steve", LocalDate.of(2026, 8, 1), "live:one", "hypixel.net", false, true);
+        }
+        try (PlayerStore players = open()) {
+            PlayerSnapshot snapshot = players.get(uuid).orElseThrow();
+            assertEquals(3, snapshot.totalMinutes());
+            assertEquals(2, snapshot.afkMinutes());
+            assertEquals(2, snapshot.nearbyMinutes());
+            assertEquals(1, snapshot.sessionCount());
+        }
+    }
+
+    @Test
+    void nearbyMinuteBeforeTheRowExistsIsKept() {
+        try (PlayerStore players = open()) {
+            UUID uuid = UUID.randomUUID();
+            players.recordNearbyMinute(uuid);
+            players.recordLivePlay(uuid, "Steve", LocalDate.of(2026, 8, 1), "live:one", "hypixel.net", false, false);
+            PlayerSnapshot snapshot = players.get(uuid).orElseThrow();
+            assertEquals(1, snapshot.totalMinutes());
+            assertEquals(0, snapshot.afkMinutes());
+            assertEquals(1, snapshot.nearbyMinutes());
+        }
+    }
+
+    @Test
+    void nearbyMinuteFillsAPlayMinuteThatWasSavedOutOfRange() {
+        try (PlayerStore players = open()) {
+            UUID uuid = UUID.randomUUID();
+            players.recordLivePlay(uuid, "Steve", LocalDate.of(2026, 8, 1), "live:one", "hypixel.net", false, false);
+            players.recordNearbyMinute(uuid);
+            PlayerSnapshot snapshot = players.get(uuid).orElseThrow();
+            assertEquals(1, snapshot.totalMinutes());
+            assertEquals(1, snapshot.nearbyMinutes());
+
+            players.recordNearbyMinute(uuid);
+            players.recordLivePlay(uuid, "Steve", LocalDate.of(2026, 8, 1), "live:one", "hypixel.net", true, false);
+            PlayerSnapshot later = players.get(uuid).orElseThrow();
+            assertEquals(2, later.totalMinutes());
+            assertEquals(2, later.nearbyMinutes());
+            assertEquals(1, later.afkMinutes());
         }
     }
 

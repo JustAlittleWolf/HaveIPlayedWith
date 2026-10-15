@@ -34,6 +34,8 @@ final class StoreDb implements AutoCloseable {
     private MVMap<byte[], byte[]> profiles;
     private MVMap<byte[], byte[]> misses;
     private final Map<UUID, PlayerRecord> live = new HashMap<>();
+    /** Nearby minutes that arrived before the play row was written. */
+    private final Map<UUID, Long> pendingNearby = new HashMap<>();
 
     private StoreDb(StoreWorker worker, MVStore store) {
         this.worker = worker;
@@ -65,6 +67,10 @@ final class StoreDb implements AutoCloseable {
         worker.run(task);
     }
 
+    void execute(StoreWork task) {
+        worker.execute(task);
+    }
+
     @Override
     public void close() {
         worker.close(() -> {
@@ -94,6 +100,18 @@ final class StoreDb implements AutoCloseable {
     }
 
     Optional<String> recordLivePlay(UUID uuid, String username, LocalDate day, String sessionId, String serverId) {
+        return recordLivePlay(uuid, username, day, sessionId, serverId, false, false);
+    }
+
+    Optional<String> recordLivePlay(
+        UUID uuid,
+        String username,
+        LocalDate day,
+        String sessionId,
+        String serverId,
+        boolean clientAfk,
+        boolean nearby
+    ) {
         if (serverId == null || serverId.isBlank()) {
             throw new IllegalArgumentException("serverId");
         }
@@ -101,9 +119,43 @@ final class StoreDb implements AutoCloseable {
         Optional<String> previousName = player.previousNameIfDifferent(username);
         player.setCurrentUsername(username);
         player.touchName(username, Instant.now());
-        player.credit(day, sessionId, serverId);
+        player.credit(day, sessionId, serverId, clientAfk, nearby);
+        applyPendingNearby(player);
         save(player);
         return previousName;
+    }
+
+    void recordNearbyMinute(UUID uuid) {
+        if (!hasPlayer(uuid)) {
+            pendingNearby.merge(uuid, 1L, Long::sum);
+            return;
+        }
+        PlayerRecord player = player(uuid);
+        if (player.nearbyMinutes >= player.totalMinutes) {
+            pendingNearby.merge(uuid, 1L, Long::sum);
+            return;
+        }
+        player.addNearbyMinutes(1);
+        save(player);
+    }
+
+    private void applyPendingNearby(PlayerRecord player) {
+        Long pending = pendingNearby.get(player.uuid);
+        if (pending == null || pending <= 0) {
+            pendingNearby.remove(player.uuid);
+            return;
+        }
+        long room = player.totalMinutes - player.nearbyMinutes;
+        if (room <= 0) {
+            return;
+        }
+        long applied = Math.min(room, pending);
+        player.addNearbyMinutes(applied);
+        if (applied == pending) {
+            pendingNearby.remove(player.uuid);
+            return;
+        }
+        pendingNearby.put(player.uuid, pending - applied);
     }
 
     Optional<String> applyUsername(UUID uuid, String username, Instant fetchedAt) {
