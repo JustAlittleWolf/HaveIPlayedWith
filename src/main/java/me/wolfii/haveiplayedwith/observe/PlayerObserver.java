@@ -5,7 +5,6 @@ import me.wolfii.haveiplayedwith.MinecraftUsernames;
 import me.wolfii.haveiplayedwith.ModLog;
 import me.wolfii.haveiplayedwith.ModThreads;
 import me.wolfii.haveiplayedwith.chat.RenameMessages;
-import me.wolfii.haveiplayedwith.mixin.FramerateLimitTrackerAccessor;
 import me.wolfii.haveiplayedwith.profile.ProfileApi;
 import me.wolfii.haveiplayedwith.store.PlayerStore;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
@@ -16,13 +15,10 @@ import net.minecraft.client.multiplayer.PlayerInfo;
 import net.minecraft.client.player.AbstractClientPlayer;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.network.chat.Component;
-import net.minecraft.util.Util;
 
 import java.time.Instant;
 import java.time.LocalDate;
-import java.util.HashSet;
 import java.util.Optional;
-import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
@@ -38,9 +34,8 @@ import java.util.concurrent.ExecutorService;
  * immediately. Players that still need a profile lookup stay on a bounded queue. Row writes
  * are paced by the store, so a full tab list does not hit the disk at once.
  *
- * <p>AFK minutes and nearby minutes use the same once-per-player calendar minute, on their
- * own clocks. Each only increments its own counter. Play time, days, and sessions stay on
- * the sighting above. A player can therefore be written up to three times in one minute.
+ * <p>{@link Afk} and {@link Proximity} queue their own minutes on the same clock. Those writes
+ * only increment their own counters. A player can therefore be written up to three times in one minute.
  *
  * <p>The client thread only reads game profiles and hands them to {@link #sightings}; every cache
  * read, API call and database write happens on one of this class' own threads.
@@ -61,14 +56,14 @@ public final class PlayerObserver {
     /** Calendar minute this UUID was last handed to {@link #sightings} for play time. */
     private final NotedMinutes lastNotedMinute = new NotedMinutes();
     private final ConcurrentHashMap<UUID, Long> creditedMinute = new ConcurrentHashMap<>();
-    private final NotedMinutes lastAfkMinute = new NotedMinutes();
-    private final NotedMinutes lastNearbyMinute = new NotedMinutes();
-    private final Set<UUID> nearbyNow = new HashSet<>();
+    private final Afk afk = new Afk();
+    private final Proximity proximity = new Proximity();
     private final TickPass pass = new TickPass();
     private volatile long currentMinute = Long.MIN_VALUE;
     /** One id for this client run, assigned at boot and kept across join/disconnect. */
     private final String sessionId = UUID.randomUUID().toString();
     private volatile String currentServerId;
+
     public PlayerObserver(PlayerStore players, ProfileApi profiles) {
         this.players = players;
         this.profiles = profiles;
@@ -86,9 +81,8 @@ public final class PlayerObserver {
             currentServerId = null;
             lastNotedMinute.clear();
             creditedMinute.clear();
-            lastAfkMinute.clear();
-            lastNearbyMinute.clear();
-            nearbyNow.clear();
+            afk.clear();
+            proximity.clear();
             currentMinute = Long.MIN_VALUE;
         });
         ClientTickEvents.END_CLIENT_TICK.register(this::tick);
@@ -105,12 +99,13 @@ public final class PlayerObserver {
         }
         long epochMinute = System.currentTimeMillis() / 60_000L;
         pruneIfNewMinute(epochMinute);
-        markNearby(client.player, client.level.players());
+        proximity.markNearby(client.player, client.level.players());
         String serverId = resolveServerId(client);
         if (serverId == null) {
             return;
         }
-        pass.reset(epochMinute, serverId, clientAfk(client));
+        afk.read(client);
+        pass.reset(epochMinute, serverId);
         ClientPacketListener connection = client.getConnection();
         for (PlayerInfo info : connection.getListedOnlinePlayers()) {
             if (!offer(info.getProfile(), pass)) {
@@ -133,29 +128,8 @@ public final class PlayerObserver {
         long keepAfter = epochMinute - CREDIT_MEMORY_MINUTES;
         lastNotedMinute.pruneBefore(keepAfter);
         creditedMinute.values().removeIf(minute -> minute < keepAfter);
-        lastAfkMinute.pruneBefore(keepAfter);
-        lastNearbyMinute.pruneBefore(keepAfter);
-    }
-
-    private static boolean clientAfk(Minecraft client) {
-        long latestInput = ((FramerateLimitTrackerAccessor) client.getFramerateLimitTracker()).haveiplayedwith$latestInputTime();
-        return Afk.inactive(latestInput, Util.getMillis());
-    }
-
-    private void markNearby(LocalPlayer self, Iterable<AbstractClientPlayer> others) {
-        nearbyNow.clear();
-        for (AbstractClientPlayer other : others) {
-            if (other == null || other == self) {
-                continue;
-            }
-            UUID uuid = other.getUUID();
-            if (uuid == null || uuid.equals(self.getUUID())) {
-                continue;
-            }
-            if (Proximity.nearby(other.getX() - self.getX(), other.getY() - self.getY(), other.getZ() - self.getZ())) {
-                nearbyNow.add(uuid);
-            }
-        }
+        afk.pruneBefore(keepAfter);
+        proximity.pruneBefore(keepAfter);
     }
 
     private String resolveServerId(Minecraft client) {
@@ -185,29 +159,14 @@ public final class PlayerObserver {
         if (!MinecraftUsernames.isValid(name)) {
             return true;
         }
-        if (!remember(lastNotedMinute, uuid, pass.epochMinute,
+        if (!lastNotedMinute.remember(sightings, uuid, pass.epochMinute,
             new Sighting(uuid, name, pass.day(), pass.epochMinute, pass.serverId))) {
             return false;
         }
-        if (pass.clientAfk && !remember(lastAfkMinute, uuid, pass.epochMinute, new AfkMinute(uuid))) {
+        if (!afk.offer(sightings, uuid, pass.epochMinute)) {
             return false;
         }
-        if (nearbyNow.contains(uuid) && !remember(lastNearbyMinute, uuid, pass.epochMinute, new NearbyMinute(uuid))) {
-            return false;
-        }
-        return true;
-    }
-
-    /** @return {@code false} when the notice could not be queued and this tick should stop */
-    private boolean remember(NotedMinutes seen, UUID uuid, long minute, Notice notice) {
-        if (seen.noted(uuid, minute)) {
-            return true;
-        }
-        if (!sightings.offer(notice)) {
-            return false;
-        }
-        seen.note(uuid, minute);
-        return true;
+        return proximity.offer(sightings, uuid, pass.epochMinute);
     }
 
     /**
@@ -218,12 +177,7 @@ public final class PlayerObserver {
         while (!Thread.currentThread().isInterrupted()) {
             try {
                 Notice notice = sightings.take();
-                if (notice instanceof AfkMinute afk) {
-                    players.recordAfkMinute(afk.uuid());
-                    continue;
-                }
-                if (notice instanceof NearbyMinute nearby) {
-                    players.recordNearbyMinute(nearby.uuid());
+                if (notice.record(players)) {
                     continue;
                 }
                 Sighting sighting = (Sighting) notice;
@@ -308,13 +262,11 @@ public final class PlayerObserver {
         private long epochMinute;
         private String serverId;
         private LocalDate day;
-        private boolean clientAfk;
 
-        private void reset(long epochMinute, String serverId, boolean clientAfk) {
+        private void reset(long epochMinute, String serverId) {
             this.epochMinute = epochMinute;
             this.serverId = serverId;
             this.day = null;
-            this.clientAfk = clientAfk;
         }
 
         private LocalDate day() {
@@ -325,15 +277,6 @@ public final class PlayerObserver {
         }
     }
 
-    private interface Notice {
-    }
-
     private record Sighting(UUID uuid, String username, LocalDate day, long epochMinute, String serverId) implements Notice {
-    }
-
-    private record AfkMinute(UUID uuid) implements Notice {
-    }
-
-    private record NearbyMinute(UUID uuid) implements Notice {
     }
 }
