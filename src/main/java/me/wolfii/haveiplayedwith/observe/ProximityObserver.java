@@ -35,7 +35,7 @@ final class ProximityObserver extends MinuteObserver {
             if (!withinRange(self, other)) {
                 continue;
             }
-            if (!offer(other.getGameProfile(), epochMinute, players::recordNearbyMinute)) {
+            if (!offer(other.getGameProfile(), epochMinute, uuid -> minutes.offer(() -> players.recordNearbyMinute(uuid)))) {
                 return;
             }
         }

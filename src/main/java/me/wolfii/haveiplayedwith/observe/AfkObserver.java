@@ -39,15 +39,15 @@ final class AfkObserver extends MinuteObserver {
         }
         ClientPacketListener connection = client.getConnection();
         for (PlayerInfo info : connection.getListedOnlinePlayers()) {
-            if (!offer(info.getProfile(), epochMinute, players::recordAfkMinute)) {
+            if (!offer(info.getProfile(), epochMinute, uuid -> minutes.offer(() -> players.recordAfkMinute(uuid)))) {
                 return;
             }
         }
         for (AbstractClientPlayer player : client.level.players()) {
-            if (!offer(player.getGameProfile(), epochMinute, players::recordAfkMinute)) {
+            if (!offer(player.getGameProfile(), epochMinute, uuid -> minutes.offer(() -> players.recordAfkMinute(uuid)))) {
                 return;
             }
         }
-        offer(client.player.getGameProfile(), epochMinute, players::recordAfkMinute);
+        offer(client.player.getGameProfile(), epochMinute, uuid -> minutes.offer(() -> players.recordAfkMinute(uuid)));
     }
 }

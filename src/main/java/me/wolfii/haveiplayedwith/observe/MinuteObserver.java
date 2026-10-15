@@ -6,18 +6,17 @@ import me.wolfii.haveiplayedwith.store.PlayerStore;
 import net.minecraft.client.Minecraft;
 
 import java.util.UUID;
-import java.util.function.Consumer;
+import java.util.function.Predicate;
 
 /**
- * One extra minute counter. A player is queued once per calendar minute, and a full
- * queue leaves them unnoted so the next tick can retry. The write itself never changes
- * play time.
+ * One once-a-minute pass over the players in view. A player is queued once per
+ * calendar minute, and a full queue leaves them unnoted so the next tick can retry.
  */
 abstract class MinuteObserver {
-    private static final long MEMORY_MINUTES = 60;
+    static final long MEMORY_MINUTES = 60;
 
     final PlayerStore players;
-    private final MinuteScheduler minutes;
+    final MinuteScheduler minutes;
     private final NotedMinutes noted = new NotedMinutes();
     private long currentMinute = Long.MIN_VALUE;
 
@@ -28,23 +27,25 @@ abstract class MinuteObserver {
 
     abstract void tick(Minecraft client, long epochMinute);
 
-    final void clear() {
+    void clear() {
         noted.clear();
         currentMinute = Long.MIN_VALUE;
     }
 
-    final void prune(long epochMinute) {
+    /** @return {@code true} when {@code epochMinute} is a new minute and old entries were dropped */
+    final boolean prune(long epochMinute) {
         if (epochMinute == currentMinute) {
-            return;
+            return false;
         }
         currentMinute = epochMinute;
         noted.pruneBefore(epochMinute - MEMORY_MINUTES);
+        return true;
     }
 
     /**
      * @return {@code false} when the write queue is full and this tick should stop
      */
-    final boolean offer(GameProfile profile, long epochMinute, Consumer<UUID> write) {
+    final boolean offer(GameProfile profile, long epochMinute, Predicate<UUID> enqueue) {
         if (profile == null) {
             return true;
         }
@@ -55,7 +56,7 @@ abstract class MinuteObserver {
         if (noted.noted(uuid, epochMinute)) {
             return true;
         }
-        if (!minutes.offer(() -> write.accept(uuid))) {
+        if (!enqueue.test(uuid)) {
             return false;
         }
         noted.note(uuid, epochMinute);

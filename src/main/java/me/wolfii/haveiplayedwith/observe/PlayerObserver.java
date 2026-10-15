@@ -1,7 +1,6 @@
 package me.wolfii.haveiplayedwith.observe;
 
 import com.mojang.authlib.GameProfile;
-import me.wolfii.haveiplayedwith.MinecraftUsernames;
 import me.wolfii.haveiplayedwith.ModLog;
 import me.wolfii.haveiplayedwith.ModThreads;
 import me.wolfii.haveiplayedwith.chat.RenameMessages;
@@ -40,33 +39,27 @@ import java.util.concurrent.ExecutorService;
  * <p>The client thread only reads game profiles and hands them to {@link #sightings}; every cache
  * read, API call and play-time write happens on one of this class' own threads.
  */
-public final class PlayerObserver {
+public final class PlayerObserver extends MinuteObserver {
     /** Sightings waiting on a profile lookup, per the 500 entry buffer the API budget allows. */
     private static final int MAX_LOOKUP_BUFFER = 500;
     /** Sightings waiting to be classified as "needs a lookup" or "already known". */
     private static final int MAX_SIGHTING_BUFFER = 2048;
-    private static final long CREDIT_MEMORY_MINUTES = 60;
-    private final PlayerStore players;
     private final ProfileApi profiles;
     private final ExecutorService dispatcher = ModThreads.singleWorker("sightings");
     private final ExecutorService lookupWorker = ModThreads.singleWorker("profiles");
     private final BlockingQueue<Sighting> sightings = new ArrayBlockingQueue<>(MAX_SIGHTING_BUFFER);
     private final ConcurrentHashMap<UUID, Sighting> pendingLookups = new ConcurrentHashMap<>();
     private final BlockingQueue<UUID> lookups = new ArrayBlockingQueue<>(MAX_LOOKUP_BUFFER);
-    /** Calendar minute this UUID was last handed to {@link #sightings} for play time. */
-    private final NotedMinutes lastNotedMinute = new NotedMinutes();
     private final ConcurrentHashMap<UUID, Long> creditedMinute = new ConcurrentHashMap<>();
-    private final MinuteScheduler minutes = new MinuteScheduler();
     private final AfkObserver afkObserver;
     private final ProximityObserver proximityObserver;
     private final TickPass pass = new TickPass();
-    private volatile long currentMinute = Long.MIN_VALUE;
     /** One id for this client run, assigned at boot and kept across join/disconnect. */
     private final String sessionId = UUID.randomUUID().toString();
     private volatile String currentServerId;
 
     public PlayerObserver(PlayerStore players, ProfileApi profiles) {
-        this.players = players;
+        super(players, new MinuteScheduler());
         this.profiles = profiles;
         this.afkObserver = new AfkObserver(players, minutes);
         this.proximityObserver = new ProximityObserver(players, minutes);
@@ -81,14 +74,18 @@ public final class PlayerObserver {
     public void register() {
         ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> currentServerId = ServerId.current(client));
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
-            currentServerId = null;
-            lastNotedMinute.clear();
-            creditedMinute.clear();
+            clear();
             afkObserver.clear();
             proximityObserver.clear();
-            currentMinute = Long.MIN_VALUE;
         });
-        ClientTickEvents.END_CLIENT_TICK.register(this::tick);
+        ClientTickEvents.END_CLIENT_TICK.register(this::clientTick);
+    }
+
+    @Override
+    void clear() {
+        super.clear();
+        creditedMinute.clear();
+        currentServerId = null;
     }
 
     public void close() {
@@ -97,12 +94,19 @@ public final class PlayerObserver {
         minutes.close();
     }
 
-    private void tick(Minecraft client) {
+    private void clientTick(Minecraft client) {
+        tick(client, System.currentTimeMillis() / 60_000L);
+    }
+
+    @Override
+    void tick(Minecraft client, long epochMinute) {
         if (client.level == null || client.player == null || client.getConnection() == null) {
             return;
         }
-        long epochMinute = System.currentTimeMillis() / 60_000L;
-        pruneIfNewMinute(epochMinute);
+        if (prune(epochMinute)) {
+            long keepAfter = epochMinute - MEMORY_MINUTES;
+            creditedMinute.values().removeIf(minute -> minute < keepAfter);
+        }
         String serverId = resolveServerId(client);
         if (serverId == null) {
             return;
@@ -124,16 +128,6 @@ public final class PlayerObserver {
         offer(client.player.getGameProfile(), pass);
     }
 
-    private void pruneIfNewMinute(long epochMinute) {
-        if (epochMinute == currentMinute) {
-            return;
-        }
-        currentMinute = epochMinute;
-        long keepAfter = epochMinute - CREDIT_MEMORY_MINUTES;
-        lastNotedMinute.pruneBefore(keepAfter);
-        creditedMinute.values().removeIf(minute -> minute < keepAfter);
-    }
-
     private String resolveServerId(Minecraft client) {
         String current = currentServerId;
         if (current != null) {
@@ -150,19 +144,9 @@ public final class PlayerObserver {
      * @return {@code false} when the sighting queue is full and this tick should stop offering
      */
     private boolean offer(GameProfile profile, TickPass pass) {
-        if (profile == null) {
-            return true;
-        }
-        UUID uuid = profile.id();
-        if (uuid == null) {
-            return true;
-        }
-        String name = profile.name();
-        if (!MinecraftUsernames.isValid(name)) {
-            return true;
-        }
-        return lastNotedMinute.remember(sightings, uuid, pass.epochMinute,
-            new Sighting(uuid, name, pass.day(), pass.epochMinute, pass.serverId));
+        return offer(profile, pass.epochMinute, uuid -> sightings.offer(
+            new Sighting(uuid, profile.name(), pass.day(), pass.epochMinute, pass.serverId)
+        ));
     }
 
     /**
